@@ -144,8 +144,7 @@ class CLTTrainer():
     
             torch.distributed.barrier()
         else: 
-            if self.is_main_process:
-                self.clt._initialize_b_enc(x)
+            self.clt._initialize_b_enc(x)
 
     def fit(self): 
         """ fit a clt """

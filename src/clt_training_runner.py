@@ -44,8 +44,18 @@ class CLTTrainingRunner:
             self.world_size = cast(int, world_size)
             self.cfg.device = f"cuda:{self.rank}"
         else:
-            self.rank = 0
-            self.world_size = 1
+            # Feature sharding or single GPU
+            if rank is not _missing and world_size is not _missing:
+                # Feature sharding mode
+                if not dist.is_initialized():
+                    raise RuntimeError("Feature sharding requested but process group not initialized.")
+                self.rank = cast(int, rank)
+                self.world_size = cast(int, world_size)
+                self.cfg.device = f"cuda:{self.rank}"
+            else:
+                # Single GPU mode
+                self.rank = 0
+                self.world_size = 1
 
         self.is_main_process = True if self.rank == 0 else False
         self.device = torch.device(self.cfg.device)
@@ -109,7 +119,9 @@ class CLTTrainingRunner:
                 cfg.create_sub_config(
                     CLTConfig,
                     n_layers=self.model.cfg.n_layers
-                )
+                ),
+                rank=self.rank,
+                world_size=self.world_size
             )
 
         if self.ddp:
@@ -126,7 +138,9 @@ class CLTTrainingRunner:
                 self.clt.to(self.device),
                 device_id=self.device,
             )
-
+        else:
+            #feature sharding or single GPU - no wrapper needed
+            pass
         self.update_clt_norm_scaling_factor()
 
     def run(self): 
