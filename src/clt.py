@@ -14,6 +14,7 @@ from clt.utils import DTYPE_MAP, CLT_WEIGHTS_FILENAME, CLT_CFG_FILENAME
 from clt.training.optim import JumpReLU
 from clt import logger
 from clt.load_model import load_model
+import torch.distributed as dist
 
 C_l0_COEF = 4
 
@@ -42,13 +43,16 @@ class CLT(nn.Module):
     * can take an LLM as attribute and compute replacement model forward pass
     """
 
-    def __init__(self, cfg: CLTConfig):
+    def __init__(self, cfg: CLTConfig, rank: int = 0, world_size: int = 1) -> None:
         super().__init__()
 
         self.cfg = cfg
+        self.rank = rank
+        self.world_size = world_size
         self.N_layers = cfg.n_layers
         self.d_in = cfg.d_in
         self.d_latent = cfg.d_latent
+        self.local_d_latent = self.d_latent // world_size
         self.dtype = DTYPE_MAP[cfg.dtype]
         self.device = torch.device(cfg.device)
 
@@ -61,12 +65,12 @@ class CLT(nn.Module):
         )
         self.max_layers_out = int(self.N_layers_out.max().item())
 
-        self.W_enc = nn.Parameter(torch.empty(self.N_layers, self.d_in, self.d_latent, dtype=self.dtype, device=init_device))
-        self.b_enc = nn.Parameter(torch.zeros(self.N_layers, self.d_latent, dtype=self.dtype, device=init_device))
+        self.W_enc = nn.Parameter(torch.empty(self.N_layers, self.d_in, self.local_d_latent, dtype=self.dtype, device=init_device))
+        self.b_enc = nn.Parameter(torch.zeros(self.N_layers, self.local_d_latent, dtype=self.dtype, device=init_device))
 
         if cfg.cross_layer_decoders:
             self.N_dec = self.N_layers * (self.N_layers + 1) // 2
-            self.W_dec = nn.Parameter(torch.empty(self.N_dec, self.d_latent, self.d_in, dtype=self.dtype, device=init_device))
+            self.W_dec = nn.Parameter(torch.empty(self.N_dec, self.local_d_latent, self.d_in, dtype=self.dtype, device=init_device))
             self.b_dec = nn.Parameter(torch.zeros(self.N_dec, self.d_in, dtype=self.dtype, device=init_device))
 
             l_idx, k_idx = torch.triu_indices(self.N_layers, self.N_layers, offset=0,
@@ -80,18 +84,18 @@ class CLT(nn.Module):
             self.register_buffer('layer_mask', layer_mask)
 
         else: 
-            self.W_dec = nn.Parameter(torch.empty(self.N_layers, self.d_latent, self.d_in, dtype=self.dtype, device=init_device))
+            self.W_dec = nn.Parameter(torch.empty(self.N_layers, self.local_d_latent, self.d_in, dtype=self.dtype, device=init_device))
             self.b_dec = nn.Parameter(torch.zeros(self.N_layers, self.d_in, dtype=self.dtype, device=init_device))
 
         self.log_threshold = nn.Parameter(
-            torch.full((self.N_layers, self.d_latent), math.log(cfg.jumprelu_init_threshold), dtype=self.dtype, device=init_device)
+            torch.full((self.N_layers, self.local_d_latent), math.log(cfg.jumprelu_init_threshold), dtype=self.dtype, device=init_device)
         )
         self.bandwidth = cfg.jumprelu_bandwidth
 
         self.register_buffer('feature_count', 
             torch.zeros(
                 self.N_layers, 
-                self.d_latent, 
+                self.local_d_latent, 
                 dtype=torch.long, 
                 device=init_device
             )
@@ -135,7 +139,7 @@ class CLT(nn.Module):
             bias_values = torch.zeros_like(self.b_enc).detach().cpu()
             
             for layer in range(self.N_layers):
-                for feature in range(self.d_latent):
+                for feature in range(self.local_d_latent):
                     feature_pre_acts = hidden_pre[:, layer, feature]  # [B]
                     sorted_acts, _ = torch.sort(feature_pre_acts, descending=True)
                     target_idx = int(target_activation_rate * B) + 1
@@ -229,6 +233,9 @@ class CLT(nn.Module):
 
             else: 
                 out = z @ self.W_dec[layer] + self.b_dec[layer] # [B, d_out]
+        
+        if self.world_size > 1:
+            dist.all_reduce(out, op=dist.ReduceOp.SUM)
         return out
 
     def forward_eval(
