@@ -43,7 +43,9 @@ class ActivationsStore:
             rank: int = 0, 
             world_size: int = 1,
             estimated_norm_scaling_factor_in: Optional[torch.Tensor] = None,
-            estimated_norm_scaling_factor_out: Optional[torch.Tensor] = None
+            estimated_norm_scaling_factor_out: Optional[torch.Tensor] = None,
+            shuffle_seed: Optional[int] = None,
+            cache_tokens_in_memory: bool = False
         ) -> None:
 
         self.cfg = cfg
@@ -54,8 +56,12 @@ class ActivationsStore:
         self.dtype = DTYPE_MAP[cfg.dtype]
 
         self.shuffle = True
+        self.shuffle_seed = shuffle_seed if shuffle_seed is not None else 42
         self.return_tokens = False 
         self.mix_with_previous_buffer = True
+        self._epoch_counter = 0
+        self.cache_tokens_in_memory = cache_tokens_in_memory
+        self._cached_token_batches: Optional[list[torch.Tensor]] = None
         
         model.cfg.use_hook_mlp_in = True # probably should remove
         self.buffer_counter = 0
@@ -74,7 +80,7 @@ class ActivationsStore:
         if self.cfg.cached_activations_path is None: 
 
             if self.cfg.is_multilingual_split_dataset: 
-                self.raw_ds = load_dataset_auto(cfg.dataset_path, split="all", is_multilingual_split_dataset=True).shuffle(seed=42)
+                self.raw_ds = load_dataset_auto(cfg.dataset_path, split="all", is_multilingual_split_dataset=True).shuffle(seed=self.shuffle_seed)
                 logger.info(f"First sample sequence: {self.raw_ds[0]}")
                 self.doc_languages = [self.raw_ds[i]["language"] for i in range(len(self.raw_ds))]
             else:
@@ -159,18 +165,64 @@ class ActivationsStore:
             yield toks
 
     def _reset_token_iterator(self) -> None:
+        """Create an infinite generator that reshuffles dataset each epoch."""
         tokenizer = getattr(self.model, "tokenizer", None)
         bos_id = None if tokenizer is None else tokenizer.bos_token_id
 
-        base_iter = concat_and_batch_sequences(
-            tokens_iterator=self._iterate_raw_dataset_tokens(),
-            context_size=self.context_size,
-            begin_batch_token_id=None, # we dont want to prepend bos here, we add in run_with_cache TODO
-            begin_sequence_token_id=None,
-            sequence_separator_token_id=bos_id,
-        )
-
-        self._token_iter = iter(self._batchify(base_iter))
+        def infinite_batch_generator():
+            """Generator that loops through dataset infinitely, reshuffling each epoch."""
+            while True:
+                if self._epoch_counter > 0 or self.rank == 0:
+                    logger.info(f"[Rank {self.rank}] Starting token epoch {self._epoch_counter}")
+                
+                # Use cached batches if available (avoids reprocessing)
+                if self.cache_tokens_in_memory and self._cached_token_batches is not None:
+                    logger.info(f"[Rank {self.rank}] Using cached token batches ({len(self._cached_token_batches)} batches)")
+                    
+                    # Shuffle the cached batch indices
+                    if self.shuffle:
+                        g = torch.Generator()
+                        g.manual_seed(self.shuffle_seed + self._epoch_counter)
+                        indices = torch.randperm(len(self._cached_token_batches), generator=g).tolist()
+                        batches_to_yield = [self._cached_token_batches[i] for i in indices]
+                    else:
+                        batches_to_yield = self._cached_token_batches
+                    
+                    for batch in batches_to_yield:
+                        yield batch
+                else:
+                    # First epoch or caching disabled: generate batches from dataset
+                    if self._epoch_counter > 0 and not self.cfg.is_multilingual_split_dataset:
+                        # Reshuffle dataset at the start of each epoch (except first)
+                        # For multilingual datasets, we don't reshuffle to preserve language distribution
+                        self.raw_ds = self.raw_ds.shuffle(seed=self.shuffle_seed + self._epoch_counter)
+                    
+                    # Create iterator for this epoch
+                    base_iter = concat_and_batch_sequences(
+                        tokens_iterator=self._iterate_raw_dataset_tokens(),
+                        context_size=self.context_size,
+                        begin_batch_token_id=None,
+                        begin_sequence_token_id=None,
+                        sequence_separator_token_id=bos_id,
+                    )
+                    
+                    # Cache batches on first epoch if caching enabled
+                    if self.cache_tokens_in_memory and self._cached_token_batches is None:
+                        logger.info(f"[Rank {self.rank}] Caching token batches in memory...")
+                        self._cached_token_batches = []
+                        for batch in self._batchify(base_iter):
+                            self._cached_token_batches.append(batch.cpu())  # Store on CPU to save GPU memory
+                            yield batch
+                        logger.info(f"[Rank {self.rank}] Cached {len(self._cached_token_batches)} token batches")
+                    else:
+                        # Normal mode: yield batches without caching
+                        for batch in self._batchify(base_iter):
+                            yield batch
+                
+                # Epoch complete, increment counter and loop continues
+                self._epoch_counter += 1
+        
+        self._token_iter = infinite_batch_generator()
 
     def _batchify(self, iterator: Iterator[torch.Tensor]) -> Iterator[torch.Tensor]:
         batch = []
@@ -184,12 +236,8 @@ class ActivationsStore:
                 batch = []
 
     def _next_token_batch(self) -> torch.Tensor:
-        try:
-            batch = next(self._token_iter)
-        except StopIteration:
-            self._reset_token_iterator()
-            batch = next(self._token_iter)
-
+        """Get next token batch. Iterator never exhausts due to infinite generator."""
+        batch = next(self._token_iter)
         return batch.to(device=self.device, dtype=torch.long)
 
     # ───────────────────  activation  ───────────────────
@@ -289,7 +337,7 @@ class ActivationsStore:
 
             if self.shuffle:
                 g = torch.Generator()
-                g.manual_seed(42 + self.buffer_counter) 
+                g.manual_seed(self.shuffle_seed + self.buffer_counter) 
                 
                 perm = torch.randperm(all_in.size(0), generator=g, device="cpu")
                 all_in, all_out = all_in[perm], all_out[perm]
