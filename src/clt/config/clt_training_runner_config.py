@@ -44,7 +44,7 @@ class CLTTrainingRunnerConfig(BaseModel):
     # -----Training/Optimization--------------
     total_training_tokens: int = 100_000_000
     train_batch_size_tokens: int = 4096
-    gradient_accumulation_steps: int = 4
+    gradient_accumulation_steps: int = 1
     adam_beta1: float = 0.0
     adam_beta2: float = 0.999
     lr: float = 1e-5
@@ -136,11 +136,12 @@ class CLTTrainingRunnerConfig(BaseModel):
     @model_validator(mode="before")
     def wandb_id_check(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         wandb_id = values.get("wandb_id")
-        if not wandb_id:
-            raise ValueError("wandb_id must be provided")  # Force explicit
+        # if not wandb_id:
+        #     raise ValueError("wandb_id must be provided")  # Force explicit
         
-        base_path = values.get("checkpoint_path", "checkpoints")
-        values["checkpoint_path"] = f"{base_path}/{wandb_id}"
+        if wandb_id:
+            base_path = values.get("checkpoint_path", "checkpoints")
+            values["checkpoint_path"] = f"{base_path}/{wandb_id}"
         return values
     
     @model_validator(mode="before")

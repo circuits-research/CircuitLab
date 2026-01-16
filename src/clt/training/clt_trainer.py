@@ -342,6 +342,54 @@ class CLTTrainer():
             if self.rank == 0:
                 print(f"Gradient norms: W_enc={grad_norms['W_enc']:.4f}, b_enc={grad_norms['b_enc']:.4f}, W_dec={grad_norms['W_dec']:.4f}")
 
+    # def _compute_training_step_loss(self, act_in: torch.Tensor, act_out: torch.Tensor, tokens: Optional[torch.Tensor] = None) -> LossMetrics:
+       
+    #     if self.n_training_steps < 5:
+    #         logger.info(f"GPU {self.rank} - act_in sum: {act_in.sum().item():.4f}, shape: {act_in.shape}")
+
+    #     self.optimizer.zero_grad()
+    
+    #     if self.scaler is not None:
+    #         with autocast(device_type='cuda', dtype=torch.bfloat16):
+    #             loss, loss_metrics = self.clt(act_in, act_out, self.l0_scheduler.get_lr(), df_coef=self.cfg.dead_penalty_coef)
+    #     else:
+    #         loss, loss_metrics = self.clt(act_in, act_out, self.l0_scheduler.get_lr(), df_coef=self.cfg.dead_penalty_coef)
+        
+    #     if self.n_training_steps == 0 and self.rank == 0:
+    #         logger.info(f"feat_act shape: {loss_metrics.feature_acts.shape}")
+    #         logger.info(f"act_pred shape: {loss_metrics.act_pred.shape}")
+        
+    #     if self.n_training_steps % 100 == 0 and self.world_size > 1:
+    #         loss_tensor = loss_metrics.mse_loss.detach()
+    #         all_losses = [torch.zeros_like(loss_tensor) for _ in range(self.world_size)]
+    #         dist.all_gather(all_losses, loss_tensor.contiguous())
+    #         if self.rank == 0:
+    #             loss_str = ", ".join([f"gpu{i}: {l.item():.2f}" for i, l in enumerate(all_losses)])
+    #             logger.info(f"Step {self.n_training_steps} - {loss_str}", flush=True)
+        
+    #     if self.scaler is not None:
+    #         self.scaler.scale(loss).backward()
+    #         self.scaler.unscale_(self.optimizer)
+    #         torch.nn.utils.clip_grad_norm_(self.clt.parameters(), 1.0)
+            
+    #         if self.cfg.is_sharded:
+    #             self._synchronize_feature_sharding_gradients() 
+            
+    #         self.scaler.step(self.optimizer)
+    #         self.scaler.update()
+    #     else:
+    #         loss.backward()
+            
+    #         if self.cfg.is_sharded:
+    #             self._synchronize_feature_sharding_gradients()
+                    
+    #         self.optimizer.step()
+
+    #     self._log_debug_info(loss_metrics)
+
+    #     self.update_optimizer_lr()
+    #     self.l0_scheduler.step()
+    #     return loss_metrics
     def _compute_training_step_loss(self, act_in: torch.Tensor, act_out: torch.Tensor, tokens: Optional[torch.Tensor] = None) -> LossMetrics:
     
         if self.n_training_steps < 5:
@@ -372,7 +420,8 @@ class CLTTrainer():
                 print(f"Step {self.n_training_steps} - {loss_str}", flush=True)
         
         # Scale loss for gradient accumulation
-        scaled_loss = loss / accumulation_steps
+        # scaled_loss = loss / accumulation_steps
+        scaled_loss = (loss_metrics.mse_loss / accumulation_steps) + loss_metrics.l0_loss + loss_metrics.dead_feature_loss
         
         if self.scaler is not None:
             self.scaler.scale(scaled_loss).backward()
