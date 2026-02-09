@@ -8,10 +8,8 @@ from pathlib import Path
 from clt.config import CLTTrainingRunnerConfig, CLTConfig
 from clt.clt import CLT
 from sae_lens.load_model import load_model
-from clt.training.clt_trainer import CLTTrainer
 from clt.clt_training_runner import CLTTrainingRunner
 from clt.training.activations_store import ActivationsStore
-from clt.utils import CLT_WEIGHTS_FILENAME, CLT_CFG_FILENAME
 
 N_COUNTS = 0
 

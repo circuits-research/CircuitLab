@@ -1,5 +1,4 @@
 import torch
-import wandb
 
 from pydantic import BaseModel, field_validator, model_validator, ConfigDict
 from typing import Any, Dict, Optional, TypeVar

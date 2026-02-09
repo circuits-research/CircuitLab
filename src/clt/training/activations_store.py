@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Iterator, Optional, Union, Any
 import os
 from pathlib import Path
-import time
 
 import torch
 import torch.distributed as dist
@@ -73,7 +72,7 @@ class ActivationsStore:
 
         if self.cfg.cached_activations_path is None: 
             if self.cfg.is_multilingual_split_dataset: 
-                logger.info(f"Loading entire dataset...")
+                logger.info("Loading entire dataset...")
                 self.raw_ds = load_dataset_auto(cfg.dataset_path, split="all", is_multilingual_split_dataset=True).shuffle(seed=42)
                 logger.info(f"First sample sequence: {self.raw_ds[0]}")
                 self.doc_languages = [self.raw_ds[i]["language"] for i in range(len(self.raw_ds))]
@@ -81,7 +80,7 @@ class ActivationsStore:
                 assert cfg.monolingual_language is not None, "monolingual_language must be specified for monolingual datasets"
                 logger.info(f"Loading {cfg.monolingual_language} dataset...")
                 self.raw_ds = load_dataset_auto(cfg.dataset_path, split=cfg.monolingual_language, disk=self.cfg.disk)
-            logger.info(f"Loaded dataset")
+            logger.info("Loaded dataset")
         
             if "tokens" not in self.raw_ds.column_names:
                 if "input_ids" in self.raw_ds.column_names:

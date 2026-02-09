@@ -1,7 +1,6 @@
 import os
 import sys
 from pathlib import Path
-import time
 import random
 import numpy as np
 import torch
@@ -128,11 +127,11 @@ def binary_search_max_batch_size(args, model, device, mode="ddp", min_batch=1, m
         if success:
             max_working = mid
             if rank == 0:
-                print(f"✓ SUCCESS")
+                print("✓ SUCCESS")
             left = mid + 1
         else:
             if rank == 0:
-                print(f"✗ OOM")
+                print("✗ OOM")
             right = mid - 1
 
     return max_working
@@ -157,7 +156,7 @@ def test_max_batch_size_comparison(args):
     
     if rank == 0:
         print(f"\n{'='*60}")
-        print(f"GPU Memory Test: DDP vs Feature Sharding")
+        print("GPU Memory Test: DDP vs Feature Sharding")
         print(f"{'='*60}")
         print(f"World size: {world_size}")
         print(f"Model: {args.model_name} (d_in={args.d_in}, d_latent={args.d_latent})")
@@ -274,26 +273,26 @@ def test_max_batch_size_comparison(args):
         print("FINAL COMPARISON")
         print("="*60)
         print(f"Number of GPUs: {world_size}")
-        print(f"\nFeature Sharding:")
+        print("\nFeature Sharding:")
         print(f"  - Max batch size (total): {max_batch_fs}")
         print(f"  - Batch per GPU: {max_batch_fs} (all GPUs process same data)")
         print(f"  - Effective throughput: {max_batch_fs} samples/step")
-        print(f"\nDDP:")
+        print("\nDDP:")
         print(f"  - Max batch size (total): {max_batch_ddp}")
         print(f"  - Batch per GPU: {max_batch_ddp // world_size}")
         print(f"  - Effective throughput: {max_batch_ddp} samples/step")
-        print(f"\nMemory Efficiency:")
+        print("\nMemory Efficiency:")
         ratio = max_batch_ddp / max_batch_fs if max_batch_fs > 0 else 0
         print(f"  DDP / Feature Sharding max-batch-size ratio: {ratio:.2f}x")
         
-        print(f"\nNotes:")
-        print(f"  - Feature Sharding splits model parameters across GPUs")
-        print(f"    but processes the SAME data on all GPUs")
-        print(f"  - DDP replicates full model on each GPU but SPLITS")
-        print(f"    the batch across GPUs")
-        print(f"  - Feature Sharding saves parameter memory but duplicates")
-        print(f"    activation memory")
-        print(f"  - DDP duplicates parameter memory but saves activation memory")
+        print("\nNotes:")
+        print("  - Feature Sharding splits model parameters across GPUs")
+        print("    but processes the SAME data on all GPUs")
+        print("  - DDP replicates full model on each GPU but SPLITS")
+        print("    the batch across GPUs")
+        print("  - Feature Sharding saves parameter memory but duplicates")
+        print("    activation memory")
+        print("  - DDP duplicates parameter memory but saves activation memory")
         print(f"{'='*60}\n")
     
     dist.destroy_process_group()

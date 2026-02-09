@@ -44,7 +44,7 @@ def test_ddp_vs_feature_sharding(args):
     device = f"cuda:{rank}"
     
     if rank == 0:
-        print(f"Feature Sharding vs DDP Comparison")
+        print("Feature Sharding vs DDP Comparison")
     
     # Feature sharding: each rank has local_d_latent features
     cfg_fs = CLTConfig(

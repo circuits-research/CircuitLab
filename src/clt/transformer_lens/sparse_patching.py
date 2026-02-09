@@ -1,4 +1,3 @@
-from pathlib import Path
 
 def patch_sparse_attention_models():
     """Add sparse attention models to TransformerLens OFFICIAL_MODEL_NAMES and MODEL_ALIASES."""
@@ -110,7 +109,7 @@ def patch_sparse_attention_config():
                     
                     # Load the state dict
                     state_dict = torch.load(weight_path, map_location="cpu")
-                    print(f"Successfully loaded sparse model weights from final.pth")
+                    print("Successfully loaded sparse model weights from final.pth")
                     return state_dict
                     
                 except Exception as e:

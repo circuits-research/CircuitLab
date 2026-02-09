@@ -8,7 +8,6 @@ from safetensors.torch import save_file, load_file
 import json
 from pydantic import BaseModel, ConfigDict
 from typing import Union, Optional, Dict
-from transformer_lens.hook_points import HookedRootModule
 
 from clt.config import CLTConfig
 from clt.utils import DTYPE_MAP, CLT_WEIGHTS_FILENAME, CLT_CFG_FILENAME

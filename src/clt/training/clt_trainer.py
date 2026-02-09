@@ -311,7 +311,7 @@ class CLTTrainer():
 
             if self.rank == 0:
                 logger.info(f"\nStep {self.n_training_steps}")
-                logger.info(f"Activation norms per GPU (Local Shard Norms):")
+                logger.info("Activation norms per GPU (Local Shard Norms):")
                 for gpu_id in range(self.world_size):
                     # sqrt(sum(local_sq_norm) / N_layers)
                     local_norm_val = torch.sqrt(all_sq_norms_list[gpu_id].sum() / all_sq_norms_list[gpu_id].size(0) + 1e-12)
@@ -333,7 +333,7 @@ class CLTTrainer():
             dist.all_gather(all_grad_norms, grad_norm_tensor.contiguous())
 
             if self.rank == 0:
-                logger.info(f"Gradient norms per GPU:")
+                logger.info("Gradient norms per GPU:")
                 for gpu_id in range(self.world_size):
                     norms = all_grad_norms[gpu_id]
                     logger.info(f"  GPU {gpu_id}: W_enc={norms[0]:.4f}, b_enc={norms[1]:.4f}, W_dec={norms[2]:.4f}")
