@@ -82,6 +82,7 @@ class CLTTrainer():
 
         self.n_tokens: int = 0
         self.monitoring_l0 = None
+        self.accumulation_step: int = 0
 
     def _initialize_b_enc(self, n_batches: int = 10): 
 
@@ -167,7 +168,10 @@ class CLTTrainer():
                 )
 
                 self.n_tokens += self.cfg.train_batch_size_tokens
-                self.n_training_steps += 1
+                
+                if self.accumulation_step == 0:
+                    self.n_training_steps += 1
+                    
                 if self.is_main_process:
                     self._log_train_step(loss_metrics)
                     self._run_and_log_evals()
@@ -302,13 +306,18 @@ class CLTTrainer():
         if self.n_training_steps < 5:
             logger.info(f"GPU {self.rank} - act_in sum: {act_in.sum().item():.4f}, shape: {act_in.shape}")
 
-        self.optimizer.zero_grad()
+        # Only zero gradients at the start of accumulation
+        if self.accumulation_step == 0:
+            self.optimizer.zero_grad()
     
         if self.scaler is not None:
             with autocast(device_type='cuda', dtype=torch.bfloat16):
                 loss, loss_metrics = self.clt(act_in, act_out, self.l0_scheduler.get_lr(), df_coef=self.cfg.dead_penalty_coef)
         else:
             loss, loss_metrics = self.clt(act_in, act_out, self.l0_scheduler.get_lr(), df_coef=self.cfg.dead_penalty_coef)
+        
+        # Scale loss by accumulation steps
+        loss = loss / self.cfg.gradient_accumulation_steps
         
         if self.n_training_steps == 0 and self.rank == 0:
             logger.info(f"feat_act shape: {loss_metrics.feature_acts.shape}")
@@ -324,26 +333,37 @@ class CLTTrainer():
         
         if self.scaler is not None:
             self.scaler.scale(loss).backward()
-            self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.clt.parameters(), 1.0)
             
-            if self.cfg.is_sharded:
-                self._synchronize_feature_sharding_gradients() 
-            
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            # Only step optimizer every N accumulation steps
+            if (self.accumulation_step + 1) % self.cfg.gradient_accumulation_steps == 0:
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.clt.parameters(), 1.0)
+                
+                if self.cfg.is_sharded:
+                    self._synchronize_feature_sharding_gradients() 
+                
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
         else:
             loss.backward()
             
-            if self.cfg.is_sharded:
-                self._synchronize_feature_sharding_gradients()
-                    
-            self.optimizer.step()
+            # Only step optimizer every N accumulation steps
+            if (self.accumulation_step + 1) % self.cfg.gradient_accumulation_steps == 0:
+                if self.cfg.is_sharded:
+                    self._synchronize_feature_sharding_gradients()
+                        
+                self.optimizer.step()
+
+        # Increment accumulation counter
+        self.accumulation_step = (self.accumulation_step + 1) % self.cfg.gradient_accumulation_steps
 
         self._log_debug_info(loss_metrics)
 
-        self.update_optimizer_lr()
-        self.l0_scheduler.step()
+        # Only update learning rate when we actually step the optimizer
+        if self.accumulation_step == 0:
+            self.update_optimizer_lr()
+            self.l0_scheduler.step()
+        
         return loss_metrics
 
     def update_optimizer_lr(self) -> float:

@@ -60,6 +60,7 @@ def main():
         n_train_batch_per_buffer=36,
         total_training_tokens=total_training_tokens,
         train_batch_size_tokens=train_batch_size_tokens,
+        gradient_accumulation_steps=1,  # Set > 1 to accumulate gradients over multiple micro-batches
         adam_beta1=0.9,
         adam_beta2=0.999,
         lr=2e-4,
