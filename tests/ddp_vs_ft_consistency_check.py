@@ -261,7 +261,11 @@ def test_ddp_vs_feature_sharding(args):
     
     loss_fs = metrics_fs.mse_loss + metrics_fs.l0_loss + metrics_fs.dead_feature_loss
     loss_fs.backward()
-    
+        
+    # .distributed.nn.functional import all_reduce incorrectly scales the gradient, we divide by world_size (see https://github.com/pytorch/pytorch/issues/58005)
+    clt_fs.W_enc.grad = clt_fs.W_enc.grad / world_size
+    clt_fs.W_dec.grad = clt_fs.W_dec.grad / world_size
+
     if rank == 0:
         fs_w_enc_grad_norm = clt_fs.W_enc.grad.norm().item() if clt_fs.W_enc.grad is not None else 0.0
         fs_w_dec_grad_norm = clt_fs.W_dec.grad.norm().item() if clt_fs.W_dec.grad is not None else 0.0

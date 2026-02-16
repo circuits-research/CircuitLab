@@ -54,35 +54,29 @@ class CLTTrainingRunner:
         self.is_main_process = True if self.rank == 0 else False
         self.device = torch.device(self.cfg.device)
         
-        # Log to verify
-        logger.info(f"Rank {self.rank}: Initializing CLT on device {self.cfg.device}")
-
         # For multlingual models added to transformer-lens
         if self.cfg.is_multilingual_split_dataset: 
             logger.info("Adding names to Transformer Lens")
             patch_official_model_names()
             patch_convert_hf_model_config()
 
-        if self.cfg.is_distributed:
+        if self.cfg.is_distributed: # for feature sharding, we load the same data per gpu, still only loaded onces from disk so fast
             self.cfg.train_batch_size_tokens = cfg.train_batch_size_tokens // self.world_size
             self.cfg.total_training_tokens = cfg.total_training_tokens // self.world_size
 
         # no need to load the model if the activations are saved, just the number of layers
         if self.cfg.cached_activations_path is not None:
 
-            if "sparse" in self.cfg.model_name:
-                n_layers = 12  # sparse GPT-2 has 12 layers, TODO: to remove
-            else:
-                model_cfg = AutoConfig.from_pretrained(self.cfg.model_name)
-                n_layers = (
-                    getattr(model_cfg, "n_layer", None)
-                    or getattr(model_cfg, "num_hidden_layers", None)
-                    or getattr(model_cfg, "num_layers", None)
+            model_cfg = AutoConfig.from_pretrained(self.cfg.model_name)
+            n_layers = (
+                getattr(model_cfg, "n_layer", None)
+                or getattr(model_cfg, "num_hidden_layers", None)
+                or getattr(model_cfg, "num_layers", None)
+            )
+            if n_layers is None:
+                raise ValueError(
+                    f"Could not infer number of layers for model '{self.cfg.model_name}'."
                 )
-                if n_layers is None:
-                    raise ValueError(
-                        f"Could not infer number of layers for model '{self.cfg.model_name}'."
-                    )
 
             self.model = DummyModel(
                 cfg=SimpleNamespace(
@@ -126,10 +120,8 @@ class CLTTrainingRunner:
             )
             # Ensure it's on the correct device
             self.clt = self.clt.to(self.device)
-            logger.info(f"Rank {self.rank}: CLT created and moved to {self.device}")
 
         if self.ddp:
-            logger.info(f"Rank {self.rank}: Wrapping CLT with DDP")
             self.clt = torch.nn.parallel.DistributedDataParallel(
                 self.clt,
                 device_ids=[self.rank],
@@ -162,13 +154,6 @@ class CLTTrainingRunner:
                 id=self.cfg.wandb_id,
             )
   
-        if self.is_main_process:
-            logger.info(f"Norm scaling in: {self.clt.estimated_norm_scaling_factor_in if hasattr(self.clt, 'estimated_norm_scaling_factor_in') else 'N/A'}")
-            logger.info(f"l0_coefficient: {self.cfg.l0_coefficient}")
-            logger.info(f"l0_warm_up_steps: {self.cfg.l0_warm_up_steps}")
-            logger.info(f"lr: {self.cfg.lr}")
-            logger.info(f"dead_penalty_coef: {self.cfg.dead_penalty_coef}")
-
         trainer = CLTTrainer(
             clt=self.clt,
             activations_store=self.activations_store,
@@ -178,7 +163,8 @@ class CLTTrainingRunner:
             world_size=self.world_size
         )
         
-        logger.info("Start training...")
+        if self.rank == 0 : 
+            logger.info("Start training...")
         clt = trainer.fit()
 
         if self.cfg.log_to_wandb and self.is_main_process:

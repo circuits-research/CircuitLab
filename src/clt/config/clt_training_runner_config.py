@@ -25,7 +25,7 @@ class CLTTrainingRunnerConfig(BaseModel):
     dataset_path: str = "" # Hugging face path
     is_dataset_tokenized: bool = True
     is_multilingual_split_dataset: bool = False # can be ignored, it is only for multilingual datasets processing
-    monolingual_language: Optional[str] = "eng"
+    split: str = "train"
     disk: bool = False # use load_from_disk instead and local dataset
 
     # -----CLT parameters---------------------
@@ -46,6 +46,7 @@ class CLTTrainingRunnerConfig(BaseModel):
     n_batches_for_norm_estimate: int = 10
 
     # -----Training/Optimization--------------
+    distributed_setup: str = "feature_sharding"
     total_training_tokens: int = 100_000_000
     train_batch_size_tokens: int = 4096 # should be divisible by the context
     adam_beta1: float = 0.0
@@ -87,10 +88,9 @@ class CLTTrainingRunnerConfig(BaseModel):
     run_name: str | None = None
     wandb_entity: str | None = None
 
-    # -----DDP------------------------------
-    ddp: bool = False
-    fsdp: bool = False
-    feature_sharding: bool = False
+    ddp: bool 
+    fsdp: bool 
+    feature_sharding: bool
     
     model_config = ConfigDict(
         validate_assignment = False, # re-run assigment after field value change
@@ -103,26 +103,30 @@ class CLTTrainingRunnerConfig(BaseModel):
 
     @model_validator(mode="before")
     def validate_ddp_fsdp_sharding(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        ddp = bool(values.get("ddp"))
-        fsdp = bool(values.get("fsdp"))
-        feature_sharding = bool(values.get("feature_sharding"))
+        distributed_setup = values.get("distributed_setup")
 
-        if int(ddp) + int(fsdp) + int(feature_sharding) > 1: 
-                raise ValueError(
-                    "Only one can be selected between ddp, sfdp, and feature sharding"
-                )
+        valid_setups = {"None", "ddp", "fsdp", "feature_sharding"}
+        if distributed_setup not in valid_setups:
+            raise ValueError(
+                "distributed_setup must be one of {'None', 'ddp', 'fsdp', 'feature_sharding'}"
+            )
+
+        values["ddp"] = distributed_setup == "ddp"
+        values["fsdp"] = distributed_setup == "fsdp"
+        values["feature_sharding"] = distributed_setup == "feature_sharding"
+
         return values
 
     @model_validator(mode="before")
     def validate_ddp_and_device(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        ddp = bool(values.get("ddp"))
-        device = bool(values.get("device"))
+        distributed_setup = values.get("distributed_setup")
+        device = values["device"]
 
-        if ddp:
+        if distributed_setup in ["ddp", "fsdp", "feature_sharding"]:
             # Check if device starts with "cuda" (accepts "cuda", "cuda:0", "cuda:1", etc.)
             if not torch.cuda.is_available() or not device.startswith("cuda"):
                 raise ValueError(
-                    "DDP is enabled but CUDA is not available or not selected."
+                    "Distributed computing is enabled but CUDA is not available or not selected."
                 )
         return values
     
@@ -140,10 +144,10 @@ class CLTTrainingRunnerConfig(BaseModel):
     @field_validator("device", mode="before")
     def fallback_to_cpu(cls, v: str) -> str:
         if v.lower().startswith("cuda") and not torch.cuda.is_available():
-            print("CUDA requested but not available, using CPU.")
+            logger.info("CUDA requested but not available, using CPU.")
             return "cpu"
         elif v.lower().startswith("mps") and not torch.mps.is_available():
-            print("MPS requested but not available, using CPU.")
+            logger.info("MPS requested but not available, using CPU.")
             return "cpu"
 
         if v.lower() not in ["mps", "cpu", "cuda"]+[f"cuda:{i}" for i in range(8)]: 
@@ -189,7 +193,7 @@ class CLTTrainingRunnerConfig(BaseModel):
 
     def check_context_divides_tokens_per_batch(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         context_size = values.get("context_size")
-        train_batch_size_tokens = values.get("train_batch_size_tokens")
+        train_batch_size_tokens = values["train_batch_size_tokens"]
 
         if train_batch_size_tokens % context_size != 0: 
             raise ValueError(

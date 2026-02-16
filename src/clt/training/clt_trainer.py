@@ -4,6 +4,7 @@ import logging
 import torch
 from torch.cuda.amp import GradScaler
 from torch.optim import Adam
+from tqdm import tqdm
 
 from clt.utils import DTYPE_MAP
 from clt.clt import CLT
@@ -79,7 +80,7 @@ class CLTTrainer():
 
         #PRECISION: AutoCast and GradScaler configuration
         self.dtype = DTYPE_MAP[self.cfg.dtype]
-        self.device_type = "cuda" if "cuda" in str(self.cfg.device) else "cpu"
+        self.device_type = torch.device(self.cfg.device).type
         self.use_autocast = (
             self.dtype in {torch.float16, torch.bfloat16}
             and self.device_type == "cuda"
@@ -94,11 +95,12 @@ class CLTTrainer():
         self.n_tokens: int = 0
         self.monitoring_l0 = None
 
-    def _initialize_b_enc(self, n_batches: int = 10):
+    def _initialize_b_enc(self, n_batches: int = 3):
+
+        model = self._get_clt()
 
         def get_hidden_pre(acts_in):
             # 1. Access the underlying model
-            model = self._get_clt()
             with torch.no_grad():
                 # 2. Handle FSDP parameter gathering
                 if self.cfg.fsdp:
@@ -111,11 +113,14 @@ class CLTTrainer():
                     
             return hidden
 
+        batch_iter = range(n_batches)
+        if self.is_main_process:
+            batch_iter = tqdm(batch_iter, desc="Initializing b_enc")
         x = []
-        for _ in range(n_batches):
+        for _ in batch_iter:
             # consume data synchronously
             acts_in, _ = (t.to(self.cfg.device) for t in next(self.activations_store.__iter__()))
-            hidden_pre = get_hidden_pre(acts_in.to(self.clt.W_enc.dtype))
+            hidden_pre = get_hidden_pre(acts_in.to(model.W_enc.dtype))
             x.append(hidden_pre)
 
         x = torch.cat(x, dim=0)
@@ -148,7 +153,6 @@ class CLTTrainer():
         if not self.cfg.is_sharded:
             raise ValueError("This function should not be used if feature_sharding is False.")
 
-        b_enc_param = self.clt.b_enc
         b_dec_param = self.clt.b_dec
 
         # if b_enc_param.grad is not None:
@@ -160,9 +164,6 @@ class CLTTrainer():
 
         dist.barrier()
 
-    def fit(self):
-            """ fit a clt """
-
     def fit(self): 
         """ fit a clt """
         
@@ -171,7 +172,6 @@ class CLTTrainer():
             self._initialize_b_enc()
         
         while self.n_tokens < self.cfg.total_training_tokens: 
-            logger.info(f"{self.n_tokens} / {self.cfg.total_training_tokens} tokens processed.")
             *tokens_part, acts_in, acts_out = (
                 t.to(device=self.cfg.device) 
                 for t in next(self.activations_store.__iter__())
@@ -183,7 +183,7 @@ class CLTTrainer():
                     t.to(device=self.cfg.device)
                     for t in next(self.activations_store.__iter__())
                 )
-
+ 
                 if self.cfg.debug and self.cfg.is_sharded:
                     self.check_activations_across_ranks_are_equal()
 
@@ -194,10 +194,8 @@ class CLTTrainer():
                 )
 
                 self.n_tokens += self.cfg.train_batch_size_tokens
-                self.n_training_steps += 1
-                if self.is_main_process:
-                    self._log_train_step(loss_metrics)
-                    self._run_and_log_evals()
+                self._log_train_step(loss_metrics)
+
                 self._checkpoint_if_needed()
 
                 # if self.cfg.functional_loss is not None and self.fc_scheduler.get_lr() > 0 and start_func_finetuning:
@@ -223,6 +221,7 @@ class CLTTrainer():
 
                 del acts_in, acts_out, tokens_part
                 torch.cuda.empty_cache()
+                self.n_training_steps += 1
 
             self.save_checkpoint_fn(
                 trainer=self,
@@ -343,9 +342,6 @@ class CLTTrainer():
 
     def _compute_training_step_loss(self, act_in: torch.Tensor, act_out: torch.Tensor, tokens: Optional[torch.Tensor] = None) -> LossMetrics:
        
-        if self.n_training_steps < 5:
-            logger.info(f"GPU {self.rank} - act_in sum: {act_in.sum().item():.4f}, shape: {act_in.shape}")
-
         self.optimizer.zero_grad()
 
         #PRECISION: AutoCast vs GradScaler backprop
@@ -368,17 +364,13 @@ class CLTTrainer():
                 df_coef=self.cfg.dead_penalty_coef,
             )
 
-        if self.n_training_steps == 0 and self.rank == 0:
-            logger.info(f"feat_act shape: {loss_metrics.feature_acts.shape}")
-            logger.info(f"act_pred shape: {loss_metrics.act_pred.shape}")
-
-        if self.n_training_steps % 100 == 0 and self.world_size > 1:
-            loss_tensor = loss_metrics.mse_loss.detach()
-            all_losses = [torch.zeros_like(loss_tensor) for _ in range(self.world_size)]
-            dist.all_gather(all_losses, loss_tensor.contiguous())
-            if self.rank == 0:
-                loss_str = ", ".join([f"gpu{i}: {l.item():.2f}" for i, l in enumerate(all_losses)])
-                logger.info(f"Step {self.n_training_steps} - {loss_str}")
+        # if self.n_training_steps % 100 == 0 and self.world_size > 1:
+        #     loss_tensor = loss_metrics.mse_loss.detach()
+        #     all_losses = [torch.zeros_like(loss_tensor) for _ in range(self.world_size)]
+        #     dist.all_gather(all_losses, loss_tensor.contiguous())
+        #     if self.rank == 0:
+        #         loss_str = ", ".join([f"gpu{i}: {l.item():.2f}" for i, l in enumerate(all_losses)])
+        #         logger.info(f"Step {self.n_training_steps} - {loss_str}")
         
         if self.scaler is not None:
             self.scaler.scale(loss).backward()
@@ -400,7 +392,7 @@ class CLTTrainer():
 
             self.optimizer.step()
 
-        if self.cfg.debug: 
+        if self.cfg.debug:
             self._log_debug_info(loss_metrics)
 
         self.update_optimizer_lr()
@@ -417,25 +409,54 @@ class CLTTrainer():
     def _log_train_step(self, loss_metrics: LossMetrics):
         if (
             self.cfg.log_to_wandb and
-            (self.n_training_steps + 1) % self.cfg.wandb_log_frequency == 0
+            (self.n_training_steps) % self.cfg.wandb_log_frequency == 0
         ):
-            wandb.log( # type: ignore[attr-defined]
-                self._build_train_step_log_dict(loss_metrics),
-                step=self.n_tokens * self.world_size,
-            )
+            logging_dict = self._build_train_step_log_dict(loss_metrics)
+            if self.is_main_process:
+                wandb.log( # type: ignore[attr-defined]
+                    logging_dict,
+                    step=self.n_tokens * self.world_size,
+                )
+
+    def gather_feature_activations(self, feat_act: torch.Tensor) -> torch.Tensor:
+        """
+        Gather feature activations across feature-sharded processes.
+        Input:  [B, N_layers, local_d_latent]
+        Output: [B, N_layers, d_latent]
+        """
+
+        if not self.cfg.is_sharded:
+            return feat_act
+
+        gathered = [
+            torch.zeros_like(feat_act)
+            for _ in range(self.world_size)
+        ]
+
+        dist.all_gather(gathered, feat_act.contiguous())
+
+        # Concatenate along latent dimension
+        full_feat_act = torch.cat(gathered, dim=-1)
+
+        return full_feat_act
 
     def _build_train_step_log_dict(self, loss_metrics: LossMetrics) -> Dict:
-        act_in = loss_metrics.act_in
         act_out = loss_metrics.act_out
         feature_acts = loss_metrics.feature_acts
         act_pred = loss_metrics.act_pred
         loss = loss_metrics.mse_loss + loss_metrics.l0_loss # TODO, need to change this
-
         clt_model = self._get_clt()
         dead_features_per_layer = clt_model.get_dead_features().sum(dim=1)
-        dead_features_average_count = dead_features_per_layer.float().mean()
+
+        if self.cfg.is_sharded:
+            feature_acts = self.gather_feature_activations(
+                feature_acts
+            )
+
+            dist.all_reduce(dead_features_per_layer, op=dist.ReduceOp.SUM)
 
         # metrics for currents acts
+        dead_features_average_count = dead_features_per_layer.float().mean()
         l0_across_layers = (feature_acts > 0).float().sum(-1).mean(0)
         l0 = l0_across_layers.mean()
         current_learning_rate = self.optimizer.param_groups[0]["lr"]
@@ -444,12 +465,18 @@ class CLTTrainer():
         explained_variance_across_layers = 1 - per_token_l2_loss.mean(0) / total_variance.mean(0)
         explained_variance = explained_variance_across_layers.mean()
         normalized_mse = 1 - explained_variance
+        n_training_tokens = self.n_tokens * self.world_size
 
         # monitoring l0 to stop training, TODO: should be done somewhere else ?
         self.monitoring_l0 = l0.item()
 
-        logger.info(f"MSE Loss: {loss_metrics.mse_loss:.4f}")
-        logger.info(f"L0 Loss: {loss_metrics.l0_loss:.4f}")
+        if self.is_main_process: 
+            logger.info(
+                f"Step: {self.n_training_steps} | "
+                f"Loss: {loss:.4f} | "
+                f"EV: {explained_variance:.4f} | "
+                f"L0: {l0:.2f}"
+            )
 
         # Load the dictionary
         log_dict = {
@@ -463,11 +490,10 @@ class CLTTrainer():
             "metrics/dead_features": dead_features_average_count.item(),
             # "losses/l0_loss_replacement": loss_metrics.l0_loss_replacement.item(),
             # "metrics/next_token_per": loss_metrics.pred_per if loss_metrics.pred_per is not None else 0.0,
-            # sparsity
             "details/current_learning_rate": current_learning_rate,
             "details/current_l0_coefficient": self.l0_scheduler.get_lr(),
             # "details/current_fl_coefficient": self.fc_scheduler.get_lr(),
-            "details/n_training_tokens": self.n_tokens * self.world_size,
+            "details/n_training_tokens": n_training_tokens,
         }
 
         for l in range(len(l0_across_layers)):
@@ -500,10 +526,6 @@ class CLTTrainer():
         # log_dict["losses/hybrid_loss"] = loss_metrics.hybrid_loss
 
         return log_dict
-
-    def _run_and_log_evals(self):
-        pass
-
 
     @torch.no_grad()
     def _checkpoint_if_needed(self):

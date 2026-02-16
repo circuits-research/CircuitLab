@@ -1,10 +1,4 @@
 import os
-import sys
-from pathlib import Path
-project_root = Path(__file__).parent.parent
-if str(project_root / "src") not in sys.path:
-    sys.path.insert(0, str(project_root / "src"))
-
 import random
 import numpy as np
 import torch
@@ -307,8 +301,9 @@ def test_ddp_vs_feature_sharding():
     if rank == 0:
         if all(g is not None for g in W_enc_grad_list):
             W_enc_grad_full = torch.cat(W_enc_grad_list, dim=-1)
+            # from torch.distributed.nn.functional import all_reduce incorrectly scales the gradient, we divide by world_size
             print(f"DDP W_enc.grad sample: {clt_ddp.module.W_enc.grad[0,0,:5]}")
-            print(f"FS W_enc.grad sample: {W_enc_grad_full[0,0,:5]}")
+            print(f"FS W_enc.grad sample: {W_enc_grad_full[0,0,:5] / world_size}")
             
             # Check if they match (they should if everything is correct)
             enc_match = torch.allclose(clt_ddp.module.W_enc.grad, W_enc_grad_full, atol=1e-3)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-import wandb
+from wandb.util import generate_id
 import torch.distributed as dist
 
 
@@ -22,6 +22,6 @@ def get_synced_wandb_id(rank: int) -> str:
     If not in distributed mode, just returns a local id.
     """
     if dist.is_available() and dist.is_initialized():
-        wandb_id: Optional[str] = wandb.util.generate_id() if rank == 0 else None
+        wandb_id: Optional[str] = generate_id() if rank == 0 else None
         return broadcast_object(wandb_id, src=0)
-    return wandb.util.generate_id()
+    return generate_id()

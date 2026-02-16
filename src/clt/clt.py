@@ -2,6 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.distributed as dist
+from torch.distributed.nn.functional import all_reduce
 from jaxtyping import Float
 from pathlib import Path
 from safetensors.torch import save_file, load_file
@@ -122,12 +123,16 @@ class CLT(nn.Module):
         dec_lim = 1.0 / (self.N_layers * self.d_in)**0.5
         nn.init.uniform_(self.W_dec, -dec_lim, dec_lim)
 
-    def _initialize_b_enc(self, hidden_pre: Float[torch.Tensor, "..."], rate: float = 0.3) -> None: 
+    def _initialize_b_enc(self, hidden_pre: Float[torch.Tensor, "..."]) -> None: 
         """
         Initialize b_enc by examining a subset of the data and picking a constant per feature
-        such that each feature activates at a certain rate.
+        such that each feature activates at a certain rate. 
         x: [B, N_layers, d_latent]
         """
+
+        # see anthropic Circuits-Updates January 2025
+        rate = 10_000. / self.d_latent 
+
         with torch.no_grad():
             # # Compute pre-activations without bias
             # hidden_pre = torch.einsum(
@@ -154,7 +159,6 @@ class CLT(nn.Module):
                     bias_values[layer, feature] = required_bias
             
             self.b_enc.data = bias_values.to(self.device)
-            logger.info(f"Initialized b_enc with target activation rate {target_activation_rate:.6f}")
             
             # # Verify the initialization by computing actual activation rates
             # feat_act, _ = self.encode(x)            
@@ -221,7 +225,7 @@ class CLT(nn.Module):
 
                 if self.cfg.is_sharded: # ideally only used for training
                     out = out.contiguous()
-                    dist.all_reduce(out, op=dist.ReduceOp.SUM)
+                    out = all_reduce(out, op=dist.ReduceOp.SUM)
                 
                 # Add bias after aggregation (not inside sharded block)
                 b_contrib = torch.zeros(1, self.N_layers, self.d_in, dtype=contrib.dtype, device=contrib.device)
@@ -233,7 +237,7 @@ class CLT(nn.Module):
                 
                 if self.cfg.is_sharded:
                     out = out.contiguous()
-                    dist.all_reduce(out, op=dist.ReduceOp.SUM)
+                    out = all_reduce(out, op=dist.ReduceOp.SUM)
                 
                 # Add bias after aggregation (not inside sharded block)
                 out = out + self.b_dec.to(out.dtype).unsqueeze(0)
@@ -251,7 +255,6 @@ class CLT(nn.Module):
                 out = z @ self.W_dec[layer] + self.b_dec[layer]
 
         return out
-
 
     def forward_eval(
         self,
@@ -309,9 +312,9 @@ class CLT(nn.Module):
         
         # SUM losses across ranks using autograd-aware all_reduce
         if self.cfg.is_sharded:
-            dist.all_reduce(l0_loss, op=dist.ReduceOp.SUM)
+            l0_loss = all_reduce(l0_loss, op=dist.ReduceOp.SUM)
             # l0_loss /= self.world_size
-            dist.all_reduce(l0_loss_accross_layers, op=dist.ReduceOp.SUM)
+            l0_loss_accross_layers = all_reduce(l0_loss_accross_layers, op=dist.ReduceOp.SUM)
             # l0_loss_accross_layers /= self.world_size
 
         if self.cfg.debug: 
@@ -323,7 +326,7 @@ class CLT(nn.Module):
 
         # SUM losses across ranks using autograd-aware all_reduce
         if self.cfg.is_sharded:
-            dist.all_reduce(dead_feature_loss, op=dist.ReduceOp.SUM)
+            dead_feature_loss = all_reduce(dead_feature_loss, op=dist.ReduceOp.SUM)
             # dead_feature_loss /= self.world_size
 
         ### Dead feature count local
@@ -346,6 +349,7 @@ class CLT(nn.Module):
         )
 
     def log_loss_debug(
+        self, 
         feat_act,
         feature_norms_local,
         l0_loss,

@@ -106,7 +106,7 @@ def binary_search_max_batch_size(args, model, device, mode="ddp", min_batch=1, m
     For DDP, result is multiplied by world_size since each GPU handles a portion of the batch.
     """
     rank = dist.get_rank() if dist.is_initialized() else 0
-    world_size = dist.get_world_size() if dist.is_initialized() else 1
+    # world_size = dist.get_world_size() if dist.is_initialized() else 1
     
     left, right = min_batch, max_batch
     max_working = 0
