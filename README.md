@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./images/image.png" alt="CLT banner" width="600"/>
+  <img src="./images/image.png" alt="CLT banner" width="800"/>
 </p>
 
 # CLT
