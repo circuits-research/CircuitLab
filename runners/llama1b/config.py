@@ -1,5 +1,5 @@
 from pathlib import Path
-from clt.config.clt_training_runner_config import CLTTrainingRunnerConfig
+from circuitlab.config.clt_training_runner_config import CLTTrainingRunnerConfig
 
 from infra.wandb_utils import get_synced_wandb_id
 
@@ -10,7 +10,7 @@ def clt_training_runner_config(rank: int = 0, world_size: int = 1, generation: b
     distributed_setup = "feature_sharding" if not generation else "None"
     
     ### IMPORTANT, where activations will be stored (around 1-2TB)
-    artifact_root = "/fast/fdraye/clt"
+    artifact_root = ""
     activations_root = artifact_root / Path("activations") / MODEL
     checkpoints_root = artifact_root / Path("checkpoints") / MODEL
 

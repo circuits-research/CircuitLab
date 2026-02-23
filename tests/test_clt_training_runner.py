@@ -5,11 +5,11 @@ from transformer_lens.hook_points import HookedRootModule
 import wandb
 from pathlib import Path
 
-from clt.config import CLTTrainingRunnerConfig, CLTConfig
-from clt.clt import CLT
+from circuitlab.config import CLTTrainingRunnerConfig, CLTConfig
+from circuitlab.clt import CLT
 from sae_lens.load_model import load_model
-from clt.clt_training_runner import CLTTrainingRunner
-from clt.training.activations_store import ActivationsStore
+from circuitlab.clt_training_runner import CLTTrainingRunner
+from circuitlab.training.activations_store import ActivationsStore
 
 N_COUNTS = 0
 

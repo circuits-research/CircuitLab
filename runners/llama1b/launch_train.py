@@ -1,7 +1,7 @@
 
-from clt.clt_training_runner import CLTTrainingRunner
+from circuitlab.clt_training_runner import CLTTrainingRunner
 from runners.llama1b.config import clt_training_runner_config
-from clt import logger
+from circuitlab import logger
 
 import os
 import torch

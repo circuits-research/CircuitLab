@@ -1,7 +1,7 @@
 import pytest
 import torch
 from transformer_lens import HookedTransformer
-from featflow.transformer_lens.hooked_transformer_wrapper import patch_transformer_lens
+from circuitlab.transformer_lens.hooked_transformer_wrapper import patch_transformer_lens
 
 ### Just tests to check our own understanding of transformer lens, useful for future extensions to replacement score finetuning
 

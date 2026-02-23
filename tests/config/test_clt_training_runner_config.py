@@ -1,7 +1,7 @@
 import json
 import pytest
-from featflow.config.clt_config import CLTConfig
-from featflow.config.clt_training_runner_config import CLTTrainingRunnerConfig
+from circuitlab.config.clt_config import CLTConfig
+from circuitlab.config.clt_training_runner_config import CLTTrainingRunnerConfig
 import torch 
 
 def make_cfg(**kwargs):

@@ -6,8 +6,8 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
-from clt.config.clt_config import CLTConfig
-from clt.clt import CLT
+from circuitlab.config.clt_config import CLTConfig
+from circuitlab.clt import CLT
 
 project_root = Path(__file__).parent.parent
 if str(project_root / "src") not in sys.path:

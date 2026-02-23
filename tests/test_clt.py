@@ -1,7 +1,7 @@
 import pytest 
 from tests.utils import build_clt_training_runner_cfg
-from clt.config import CLTTrainingRunnerConfig, CLTConfig
-from clt.clt import CLT
+from circuitlab.config import CLTTrainingRunnerConfig, CLTConfig
+from circuitlab.clt import CLT
 from pathlib import Path
 import os 
 import torch 

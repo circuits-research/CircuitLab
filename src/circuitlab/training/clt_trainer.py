@@ -9,13 +9,12 @@ import torch.distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from tqdm import tqdm
 
-from clt.utils import DTYPE_MAP
-from clt.clt import CLT
-from clt.training.activations_store import ActivationsStore
-from clt.training.optim import LearningRateScheduler
-from clt.clt import LossMetrics
-from clt.config import CLTTrainingRunnerConfig
-from clt import logger
+from circuitlab.utils import DTYPE_MAP
+from circuitlab.clt import CLT, LossMetrics
+from circuitlab.training.activations_store import ActivationsStore
+from circuitlab.training.optim import LearningRateScheduler
+from circuitlab.config import CLTTrainingRunnerConfig
+from circuitlab import logger
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -462,9 +461,9 @@ class CLTTrainer():
         return full_feat_act
 
     def _build_train_step_log_dict(self, loss_metrics: LossMetrics) -> Dict:
-        act_out = loss_metrics.act_out.float()
-        feature_acts = loss_metrics.feature_acts.float()
-        act_pred = loss_metrics.act_pred.float()
+        act_out = loss_metrics.act_out
+        feature_acts = loss_metrics.feature_acts
+        act_pred = loss_metrics.act_pred
         loss = loss_metrics.mse_loss + loss_metrics.l0_loss # TODO, need to change this
         clt_model = self._get_clt()
         dead_features_per_layer = clt_model.get_dead_features().sum(dim=1)
@@ -477,8 +476,8 @@ class CLTTrainer():
             dist.all_reduce(dead_features_per_layer, op=dist.ReduceOp.SUM)
 
         # metrics for currents acts
-        dead_features_average_count = dead_features_per_layer.float().mean()
-        l0_across_layers = (feature_acts > 0).float().sum(-1).mean(0)
+        dead_features_average_count = dead_features_per_layer.mean()
+        l0_across_layers = (feature_acts > 0).sum(-1).mean(0)
         l0 = l0_across_layers.mean()
         current_learning_rate = self.optimizer.param_groups[0]["lr"]
         per_token_l2_loss = (act_out - act_pred).pow(2).sum(dim=-1) # shape

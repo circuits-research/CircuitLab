@@ -1,4 +1,3 @@
-
 from pydantic import BaseModel
 from typing import TypeVar
 from typing import Dict, Any, Optional

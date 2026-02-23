@@ -1,11 +1,11 @@
 [tool.poetry]
-name = "clt"
+name = "circuitlab"
 version = "0.1.0"
 description = "Training cross-layer-transcoder"
 authors = ["Florent Draye"]
 readme = "README.md"
 packages = [
-    { include = "clt", from = "src" }
+    { include = "circuitlab", from = "src" }
 ]
 
 [tool.poetry.dependencies]

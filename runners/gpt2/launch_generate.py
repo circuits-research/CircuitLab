@@ -1,9 +1,9 @@
 import torch
 import argparse
 
-from clt.transformer_lens.multilingual_patching import patch_official_model_names, patch_convert_hf_model_config
-from clt.training.activations_store import ActivationsStore
-from clt.training.compressed_activations_store import CompressionConfig
+from circuitlab.transformer_lens.multilingual_patching import patch_official_model_names, patch_convert_hf_model_config
+from circuitlab.training.activations_store import ActivationsStore
+from circuitlab.training.compressed_activations_store import CompressionConfig
 
 from sae_lens.load_model import load_model
 from infra.jobs_id import compute_job_split_range

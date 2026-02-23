@@ -14,14 +14,14 @@ from datasets import load_dataset, load_from_disk
 from transformer_lens.hook_points import HookedRootModule
 from sae_lens.tokenization_and_batching import concat_and_batch_sequences
 
-from clt.training.compressed_activations_store import (
+from circuitlab.training.compressed_activations_store import (
     CompressionConfig,
     CompressedActivationsStore,
 )
-from clt.config import CLTTrainingRunnerConfig
-from clt.utils import DummyModel, activation_split_path
-from clt import logger
-from clt.utils import DTYPE_MAP
+from circuitlab.config import CLTTrainingRunnerConfig
+from circuitlab.utils import DummyModel, activation_split_path
+from circuitlab import logger
+from circuitlab.utils import DTYPE_MAP
 
 class ActivationsStore:
     """

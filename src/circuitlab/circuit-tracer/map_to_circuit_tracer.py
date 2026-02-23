@@ -1,6 +1,6 @@
 import torch
 from pathlib import Path
-from clt.clt import CLT
+from circuitlab.clt import CLT
 from circuit_tracer.transcoder.cross_layer_transcoder import CrossLayerTranscoder
 from circuit_tracer import ReplacementModel
 

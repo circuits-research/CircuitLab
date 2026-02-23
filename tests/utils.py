@@ -1,7 +1,7 @@
-from clt.config import CLTTrainingRunnerConfig
+from circuitlab.config import CLTTrainingRunnerConfig
 from typing import Any
 import torch 
-from clt.training.activations_store import ActivationsStore
+from circuitlab.training.activations_store import ActivationsStore
 
 TINYSTORIES_MODEL = "tiny-stories-1M"
 NEEL_NANDA_C4_10K_DATASET = "data/NeelNanda_c4_10k_tokenized"

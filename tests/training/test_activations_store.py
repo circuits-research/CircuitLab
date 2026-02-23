@@ -1,7 +1,7 @@
 import pytest
 import torch
-from clt.training.activations_store import ActivationsStore
-from clt.config import CLTTrainingRunnerConfig
+from circuitlab.training.activations_store import ActivationsStore
+from circuitlab.config import CLTTrainingRunnerConfig
 from sae_lens.load_model import load_model
 from transformer_lens.hook_points import HookedRootModule
 from tests.utils import build_clt_training_runner_cfg

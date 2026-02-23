@@ -4,7 +4,7 @@ import numpy as np
 import tempfile
 from pathlib import Path
 
-from clt.training.compressed_activations_store import (
+from circuitlab.training.compressed_activations_store import (
     CompressionConfig,
     CompressedActivationsStore,
     QuantizedTensor,

@@ -38,7 +38,7 @@ Training happens in **two steps**:
 ### 1. Generate and cache activations
 
 ``` python
-from clt import ActivationsStore, clt_training_runner_config, load_model
+from circuitlab import ActivationsStore, clt_training_runner_config, load_model
 
 # Load model
 model = load_model("meta-llama/Llama-3.2-1B", device="cuda")
@@ -61,7 +61,7 @@ store.generate_and_save_activations(
 ### 2. Train the CLT
 
 ``` python
-from clt import CLTTrainingRunner
+from circuitlab import CLTTrainingRunner
 
 # Train
 trainer = CLTTrainingRunner(cfg)
@@ -75,7 +75,7 @@ trainer.run()
 -   Compression is optional but recommended for large-scale runs (e.g. 1B +)
 -   Training with bf16 is fine (autocasting with activations and weights in bf16 but gradient states in 32) but requires higher lr (around 1.5-2x bigger)
 -   For Llama 1B, on a full 8 gpu H100 node, we reach an expansion factor of 42 with micro-batch size 512
--   We provide a sample script to map model weigths to [circuit-tracer](https://github.com/safety-research/circuit-tracer) in the [file](./src/clt/circuit-tracer/map_to_circuit_tracer.py)
+-   We provide a sample script to map model weigths to [circuit-tracer](https://github.com/safety-research/circuit-tracer) in the [file](./src/circuitlab/circuit-tracer/map_to_circuit_tracer.py)
 -   There has been recent criticism of the faithfulness of CLTs (see [post](https://www.lesswrong.com/posts/6CS2NDmoLCFcEJMor/cross-layer-transcoders-are-incentivized-to-learn-unfaithful)). We are also currently studying this phenomenon.
 
 ## Citation

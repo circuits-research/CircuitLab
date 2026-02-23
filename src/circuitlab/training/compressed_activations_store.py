@@ -19,7 +19,7 @@ import torch
 import numpy as np
 import zstandard as zstd
 
-from clt import logger
+from circuitlab import logger
 
 @dataclass
 class CompressionConfig:
