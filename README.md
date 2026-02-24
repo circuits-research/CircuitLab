@@ -15,14 +15,14 @@ We believe that a major limitation in the development of CLTs, and more broadly 
 
 This library currently implements L1-regularized [JumpReLU](https://arxiv.org/pdf/2407.14435) CLTs with the following design principles:
 
-- Follows [Anthropic](https://transformer-circuits.pub/2025/january-update/index.html)'s training guidelines
+- Follows Anthropic's [training guidelines]((https://transformer-circuits.pub/2025/january-update/index.html))
 - Supports feature sharding across GPUs (as well as DDP and FSDP)  
 - Includes activation caching and compression/quantization of the activations  
 - Adopts a structure similar to [SAE Lens](https://github.com/jbloomAus/SAELens) (code design, activation-store, etc.) and uses [Transformer Lens](https://github.com/TransformerLensOrg/TransformerLens)
 
 ## Stay-Tuned
 
-We also plan to release within the same package (March 2026):
+We also plan to release within the same package (end of February 2026):
 - An automatic interpretability pipeline  
 - A visual interface for exploring features and attribution graphs  
   - Similar in spirit (but simpler) to [Neuronpedia](https://github.com/hijohnnylin/neuronpedia)
@@ -82,10 +82,10 @@ trainer.run()
 
 ## Citation
 
-```bibtex
+<!-- ```bibtex
 @misc{CircuitLab,
   title   = {CircuitLab: A Scalable Framework for Cross-Layer Transcoders Training and Attribution-Graph Visualization},
-  author  = {Draye, Florent, Harasse Abir, T },
+  author  = {Draye, Florent and Harasse, Abir and },
   year    = {2026},
   url     = {https://github.com/CLT-Training/CLT/}
-}
+} -->
