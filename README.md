@@ -7,7 +7,7 @@
 [![Poetry](https://img.shields.io/badge/packaging-poetry-cyan)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**CLT** is a Python library for training Cross-Layer Transcoders (CLTs) at scale. We believe that a major limitation in the development of CLTs, and more broadly attribution graph methods, is the significant engineering effort required to train, analyze, and iterate on them. This library aims to reduce that overhead by providing a clean, scalable, and extensible framework.
+**CircuitLab** is a Python library for training Cross-Layer Transcoders (CLTs) at scale. We believe that a major limitation in the development of CLTs, and more broadly attribution graph methods, is the significant engineering effort required to train, analyze, and iterate on them. This library aims to reduce that overhead by providing a clean, scalable, and extensible framework.
 
 ## Features
 

@@ -106,7 +106,7 @@ class CLTTrainingRunnerConfig(BaseModel):
     def validate_ddp_fsdp_sharding(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         distributed_setup = values.get("distributed_setup")
 
-        valid_setups = {"None", "ddp", "fsdp", "feature_sharding"}
+        valid_setups = {None, "None", "ddp", "fsdp", "feature_sharding"}
         if distributed_setup not in valid_setups:
             raise ValueError(
                 "distributed_setup must be one of {'None', 'ddp', 'fsdp', 'feature_sharding'}"
