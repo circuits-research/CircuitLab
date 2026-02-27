@@ -1,4 +1,3 @@
-# TODO I commented out for mypy and ruff
 
 # import torch
 # import os

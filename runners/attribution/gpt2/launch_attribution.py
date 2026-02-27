@@ -36,7 +36,7 @@ def main():
                 desired_logit_prob=0.95,
                 max_feature_nodes=1_000,
                 batch_size=256,
-                feature_threshold=0.80,
+                feature_threshold=0.85,
                 edge_threshold=0.98,
                 offload=None,
                 run_interventions=True,

@@ -16,11 +16,11 @@ DTYPE_MAP: Dict[str, torch.dtype] = {
 
 CLT_WEIGHTS_FILENAME = "clt_weights.safetensors"
 CLT_CFG_FILENAME = "clt_cfg.json"
-# LatentCache_FILENAME = "latent_cache.safetensors"
-# LatentCache_CFG_FILENAME = "latent_cache_cfg.json"
+LatentCache_FILENAME = "latent_cache.safetensors"
+LatentCache_CFG_FILENAME = "latent_cache_cfg.json"
 # PROMPTS_FOLDERNAME = "prompts"
 # EXPLANATIONS_FOLDERNAME = "explanations"
-# DICT_FOLDERNAME = "dict"
+DICT_FOLDERNAME = "dict"
 
 class DummyModel(BaseModel):
     cfg: Any

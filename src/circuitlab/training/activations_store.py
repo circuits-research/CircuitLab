@@ -18,7 +18,7 @@ from circuitlab.training.compressed_activations_store import (
     CompressionConfig,
     CompressedActivationsStore,
 )
-from circuitlab.config import CLTTrainingRunnerConfig
+from circuitlab.config import CLTTrainingRunnerConfig, AutoInterpConfig
 from circuitlab.utils import DummyModel, activation_split_path
 from circuitlab import logger
 from circuitlab.utils import DTYPE_MAP
@@ -42,7 +42,7 @@ class ActivationsStore:
 
     def __init__(self, 
             model: Union[HookedRootModule, DummyModel], 
-            cfg: CLTTrainingRunnerConfig, 
+            cfg: Union[CLTTrainingRunnerConfig, AutoInterpConfig],
             rank: int = 0, 
             world_size: int = 1,
             estimated_norm_scaling_factor_in: Optional[torch.Tensor] = None,
@@ -56,9 +56,16 @@ class ActivationsStore:
         self.world_size = world_size
         self.dtype = DTYPE_MAP[cfg.dtype]
 
-        self.shuffle = True
-        self.return_tokens = False 
-        self.mix_with_previous_buffer = True
+        if isinstance(cfg, AutoInterpConfig): 
+            self.shuffle = False
+            self.return_tokens = True
+            self.mix_with_previous_buffer = False
+        elif isinstance(cfg, CLTTrainingRunnerConfig): 
+            self.shuffle = True
+            self.return_tokens = False
+            self.mix_with_previous_buffer = False
+        else:
+            raise TypeError("cfg must be either CLTTrainingRunnerConfig or AutoInterpConfig")
         
         model.cfg.use_hook_mlp_in = True # probably should remove
         self.buffer_counter = 0
