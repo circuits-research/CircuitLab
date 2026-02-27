@@ -7,7 +7,7 @@ from circuitlab.training.compressed_activations_store import CompressionConfig
 
 from sae_lens.load_model import load_model
 from infra.jobs_id import compute_job_split_range
-from runners.gpt2.config import clt_training_runner_config
+from runners.training.gpt2.config import clt_training_runner_config
 
 def main(job_id: int, total_jobs: int):
     """
@@ -23,8 +23,7 @@ def main(job_id: int, total_jobs: int):
     )
 
     # number of token activations to save, could more than total_training_tokens 
-    number_of_tokens = 301989888
-
+    number_of_tokens = 300_000_000
     print(f"Job {job_id}: Processing splits {split_begin_idx} to {split_end_idx-1}")
 
     if cfg.is_multilingual_split_dataset: 
