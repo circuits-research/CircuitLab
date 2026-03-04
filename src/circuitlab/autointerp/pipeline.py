@@ -1,839 +1,927 @@
+import os
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import sqlite3
+import torch
 
-# import torch
-# import os
-# import json
-# import heapq
-# from pathlib import Path
-# from safetensors.torch import load_file
-# from typing import List, Optional, Dict
-# from safetensors.torch import save_file
-# import random 
+from sae_lens.load_model import load_model
+from circuitlab.config import AutoInterpConfig
+from circuitlab.clt import CLT
+from circuitlab.training.activations_store import ActivationsStore
+from circuitlab.training.optim import JumpReLU
+from circuitlab.utils import DTYPE_MAP
+from circuitlab import logger
 
-# from circuitlab.config import AutoInterpConfig
-# from circuitlab.utils import LatentCache_CFG_FILENAME, PROMPTS_FOLDERNAME, EXPLANATIONS_FOLDERNAME, DICT_FOLDERNAME
-# from circuitlab.clt import CLT
-# from circuitlab.load_model import load_model
-# from circuitlab.training.activations_store import ActivationsStore
-# from circuitlab import logger
-# from circuitlab.autointerp.client import run_client
-# from circuitlab.autointerp.prompt import generate_prompt
-# from circuitlab.autointerp.prompt_multilingual import generate_prompt_multilingual
-# from circuitlab.transformer_lens.multilingual_patching import patch_official_model_names, patch_convert_hf_model_config
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# DDL shared by _save_to_sqlite and merge_job_databases
+_FEATURES_TABLE_DDL = """
+    CREATE TABLE IF NOT EXISTS features (
+        layer                 INTEGER NOT NULL,
+        feature_id            INTEGER NOT NULL,
+        average_activation    REAL    NOT NULL,
+        top_examples          TEXT    NOT NULL,
+        top_examples_tks      TEXT    NOT NULL,
+        top_activating_tokens TEXT    NOT NULL,
+        description           TEXT    NOT NULL,
+        explanation           TEXT    NOT NULL,
+        raw_explanation       TEXT    NOT NULL,
+        PRIMARY KEY (layer, feature_id)
+    )
+"""
 
-# TOP_K_DEFAULT = 100
-# N_TOP_ACTIVATING_TOKENS_SHOWN = 4
+class AutoInterp:
+    """
+    Single-pass streaming AutoInterp.
 
-# class AutoInterp:
-#     def __init__(self, cfg: AutoInterpConfig):
-#         self.cfg = cfg
-#         self.total_autointerp_tokens = cfg.total_autointerp_tokens
-#         self.device = torch.device(self.cfg.device)
-#         self.ctx = cfg.context_size 
+    Usage:
+        cfg = AutoInterpConfig(...)
+        interp = AutoInterp(cfg)
+        interp.run(job_id=0, total_jobs=32, top_k=100, save_dir=Path(...))
+    """
 
-#         patch_official_model_names()
-#         patch_convert_hf_model_config()
+    def __init__(self, cfg: AutoInterpConfig) -> None:
+        self.cfg = cfg
+        self.device = torch.device(cfg.device)
+        self.ctx = cfg.context_size
 
-#         self.model = load_model(
-#             self.cfg.model_class_name,
-#             self.cfg.model_name,
-#             device=self.device,
-#             model_from_pretrained_kwargs=self.cfg.model_from_pretrained_kwargs,
-#         )
+        # patch_official_model_names()
+        # patch_convert_hf_model_config()
 
-#         self.clt = CLT.load_from_pretrained(
-#             self.cfg.clt_path, self.cfg.device
-#         )
+        self.model = load_model(
+            cfg.model_class_name,
+            cfg.model_name,
+            device=self.device,
+            model_from_pretrained_kwargs=cfg.model_from_pretrained_kwargs,
+        )
 
-#         self.clt = self.clt.to(self.device)
+        # CLT stays on CPU; only the feature subset is moved to GPU per job.
+        self.clt = CLT.load_from_pretrained(cfg.clt_path, "cpu")
 
-#         self.activations_store = ActivationsStore(
-#             self.model,
-#             self.cfg,
-#             estimated_norm_scaling_factor_in=self.clt.estimated_norm_scaling_factor_in, 
-#             estimated_norm_scaling_factor_out=self.clt.estimated_norm_scaling_factor_out
-#         )
+        self.activations_store = ActivationsStore(
+            self.model,
+            cfg,
+            estimated_norm_scaling_factor_in=self.clt.estimated_norm_scaling_factor_in,
+            estimated_norm_scaling_factor_out=self.clt.estimated_norm_scaling_factor_out,
+        )
+        # ActivationsStore defaults to return_tokens=False (yields 2-tuples).
+        # We need the token ids alongside activations, so enable it here.
+        self.activations_store.return_tokens = True
 
-#     def run(self, chunk_list: Optional[List[int]] = None):
-#         n_tokens = 0
-#         chunk_id = 0
-#         current_chunk_acts = []
-#         current_chunk_tokens = []
-#         current_chunk_languages: list[str] = []  # Track languages for current chunk
-#         current_chunk_size = 0
-#         global_sequence_count = 0  # Track global sequence position across all chunks
-        
-#         save_dir = Path(self.cfg.latent_cache_path or "")
-#         save_dir.mkdir(parents=True, exist_ok=True)
-        
-#         # Calculate chunk size based on total tokens and desired number of chunks
-#         chunk_size = self.cfg.total_autointerp_tokens // self.cfg.n_chunks
-#         print("number of chunks:", self.cfg.n_chunks)
-#         print("chunk size:", chunk_size)
-        
-#         # Remove leftover chunk files from previous runs that might have exceeded current n_chunks
-#         if save_dir.exists():
-#             for layer_dir in save_dir.glob("layer_*"):
-#                 if layer_dir.is_dir():
-#                     for chunk_file in layer_dir.glob("chunk_*.safetensors"):
-#                         chunk_id_str = chunk_file.stem.split("_")[-1]
-#                         try:
-#                             old_chunk_id = int(chunk_id_str)
-#                             if old_chunk_id >= self.cfg.n_chunks:
-#                                 chunk_file.unlink()
-#                                 print(f"Removed old chunk file: {chunk_file}")
-#                         except ValueError:
-#                             pass 
+    def run(
+        self,
+        *,
+        job_id: int,
+        total_jobs: int,
+        save_dir: Optional[Path] = None,
+        generate_explanations: bool = False,
+    ) -> None:
+        """
+        Run the full pipeline for one job (= one feature slice).
 
-#         while n_tokens < self.cfg.total_autointerp_tokens:
-            
-#             # Check if we should process this chunk or skip it
-#             should_process_chunk = chunk_list is None or chunk_id in chunk_list
-            
-#             if should_process_chunk:
-#                 tokens, acts_in, _ = next(iter(self.activations_store))
-#                 acts_in_gpu = acts_in.to(self.cfg.device).to(self.activations_store.dtype)
-#                 # acts_out_gpu = acts_out.to(self.cfg.device).to(self.activations_store.dtype)
-#                 feat_act, _ = self.clt.encode(acts_in_gpu)
-#                 # put feat_act to 0 if smaller than 1
-#                 # feat_act[feat_act < 1] = 0
-#                 # reconstruction = self.clt.decode(feat_act)
+        Args:
+            job_id:               Index of this job in [0, total_jobs).
+            total_jobs:           Total number of parallel jobs.
+            top_k:                Number of top-activating sequences per feature.
+            save_dir:             Root output directory.
+            generate_explanations: If True, run vLLM to generate explanations.
+        """
+        if save_dir is None:
+            if self.cfg.latent_cache_path is None:
+                raise ValueError(
+                    "Either pass save_dir or set cfg.latent_cache_path."
+                )
+            save_dir = Path(self.cfg.latent_cache_path)
+        save_dir.mkdir(parents=True, exist_ok=True)
 
-#                 # mse = ((reconstruction - acts_out_gpu) ** 2).sum(dim=-1).mean(0)
-#                 # variance = ((acts_out_gpu - acts_out_gpu.mean(dim=0, keepdim=True)) ** 2).sum(dim=-1).mean(0)
-#                 # print(f"Normalized MSE: {mse / variance}", flush=True)
+        index_list = self._compute_index_list(job_id, total_jobs)
+        logger.info(
+            f"[Job {job_id}/{total_jobs}] features {index_list[0]}–{index_list[-1]}"
+            f" ({len(index_list)} total)"
+        )
 
-#                 # feat_act_value = feat_act[feat_act > 0]
-#                 # print(f"Mean activation: {feat_act_value.tolist()}")
+        run_dtype = DTYPE_MAP[self.cfg.dtype]
+        self._prepare_encoder_subset(index_list=index_list, dtype=run_dtype)
 
-#                 # feat_act_last_layer = feat_act[:, -1, :]
-#                 # feat_act_last_layer_value = feat_act_last_layer[feat_act_last_layer > 0]
+        state = self._stream_and_build_topk(top_k=self.cfg.topk, run_dtype=run_dtype)
 
-#                 # print(f"Mean activation: {feat_act_last_layer_value.tolist()}")
+        logger.info(f"[Job {job_id}] Building feature dictionaries…")
+        feature_dicts_by_layer = self._state_to_feature_dicts(
+            state=state, index_list=index_list, top_k=self.cfg.topk
+        )
 
-#                 # print(f"Mean l0: {(feat_act > 0).float().sum(dim=-1).mean()}")
+        self._save_features(
+            feature_dicts_by_layer=feature_dicts_by_layer,
+            job_id=job_id,
+            save_dir=save_dir,
+        )
 
-#                 current_chunk_size += feat_act.shape[0]
-                
-#                 reshaped_acts, reshaped_tokens = self._reshape_latents(feat_act.cpu(), tokens.cpu())
-                
-#                 if reshaped_acts.shape[0] > 0:
-#                     current_chunk_acts.append(reshaped_acts)
-#                     current_chunk_tokens.append(reshaped_tokens)
-                    
-#                     # Collect language info if available
-#                     if ("CausalNLP" in self.cfg.model_name and 
-#                         hasattr(self.activations_store, 'runtime_doc_languages') and
-#                         self.activations_store.runtime_doc_languages):
-                        
-#                         # Get corresponding languages for this batch of sequences
-#                         n_sequences = reshaped_acts.shape[0]
-#                         # Use global sequence count to correctly index into runtime_doc_languages
-#                         batch_languages = self.activations_store.runtime_doc_languages[global_sequence_count:global_sequence_count + n_sequences]
-#                         current_chunk_languages.extend(batch_languages)
-                
-#                 # Update global sequence count for both processed and skipped chunks
-#                 n_sequences = reshaped_acts.shape[0] if reshaped_acts.shape[0] > 0 else 0
-#                 global_sequence_count += n_sequences
-                
-#                 n_tokens += feat_act.shape[0]
-#                 del acts_in_gpu, feat_act, reshaped_acts, reshaped_tokens
-#             else:
-#                 # Skip processing by advancing token iterator only
-#                 skipped_tokens = self.activations_store._skip_batches()
-#                 n_tokens += len(skipped_tokens)
-#                 current_chunk_size += len(skipped_tokens)
-                
-#                 # Update global sequence count for skipped sequences
-#                 # Calculate number of sequences that would have been created from skipped tokens
-#                 n_skipped_sequences = len(skipped_tokens) // self.ctx
-#                 global_sequence_count += n_skipped_sequences
-            
-#             print(n_tokens, "processed", flush=True)
-            
-#             if current_chunk_size >= chunk_size or n_tokens >= self.cfg.total_autointerp_tokens:
-#                 if current_chunk_acts:
-#                     print(f"chunk{chunk_id} saved", flush=True)
-#                     combined_acts = torch.cat(current_chunk_acts, dim=0)
-#                     combined_tokens = torch.cat(current_chunk_tokens, dim=0)
+        if generate_explanations:
+            logger.info(f"[Job {job_id}] Generating LLM explanations…")
+            self._generate_and_add_explanations(
+                feature_dicts_by_layer=feature_dicts_by_layer,
+                job_id=job_id,
+                save_dir=save_dir,
+            )
 
-#                     print(f"Chunk {chunk_id}, sparsity: {(combined_acts > 0).float().sum(-1).mean(0).mean(1)}")
-                    
-#                     # Save by layer
-#                     for layer in range(combined_acts.shape[2]):
-#                         layer_dir = save_dir / f"layer_{layer}"
+        logger.info(f"[Job {job_id}] Done.")
 
-#                         layer_dir.mkdir(exist_ok=True)
-                        
-#                         layer_data = {
-#                             "activations": combined_acts[:, :, layer, :].half(),
-#                             "tokens": combined_tokens
-#                         }
-                        
-#                         chunk_file = layer_dir / f"chunk_{chunk_id}.safetensors"
-#                         save_file(layer_data, chunk_file)
-                        
-#                         # Save language info separately as JSON if available
-#                         if ("CausalNLP" in self.cfg.model_name and current_chunk_languages):
-#                             lang_file = layer_dir / f"chunk_{chunk_id}_languages.json"
-#                             with open(lang_file, 'w') as f:
-#                                 json.dump({"languages": current_chunk_languages}, f)
-                    
-#                     logger.info(f"Saved chunk {chunk_id} with {combined_acts.shape[0]} sequences")
-#                     del combined_acts, combined_tokens
-#                 else:
-#                     print(chunk_id, "skipped", flush=True)
-                
-#                 chunk_id += 1
-#                 current_chunk_acts = []
-#                 current_chunk_tokens = []
-#                 current_chunk_languages = []  # Reset language tracking
-#                 current_chunk_size = 0
-                
-#                 # Early exit if we've processed all desired chunks
-#                 if chunk_list is not None and chunk_id > max(chunk_list):
-#                     logger.info("Finished processing all chunks in chunk_list. Stopping early.")
-#                     break
-            
-#             torch.cuda.empty_cache()
+    def _compute_index_list(self, job_id: int, total_jobs: int) -> List[int]:
+        d_latent = self.clt.d_latent
+        per_job = d_latent // total_jobs
+        start = job_id * per_job
+        end = start + per_job if job_id < total_jobs - 1 else d_latent
+        return list(range(start, end))
 
-#         cfg_path = Path(self.cfg.latent_cache_path or "") / LatentCache_CFG_FILENAME
-#         with open(cfg_path, "w") as f:
-#             json.dump(self.cfg.to_dict(), f)
-#         logger.info(f"Latent cache config saved to: {cfg_path}")
+    def _prepare_encoder_subset(
+        self, *, index_list: List[int], dtype: torch.dtype
+    ) -> None:
+        idx = torch.as_tensor(index_list, dtype=torch.long)
+        self._index_list = list(index_list)
+        self._W_enc_sub = self.clt.W_enc[:, :, idx].to(
+            self.device, dtype=dtype, non_blocking=True
+        )  # [L, d_in, F]
+        self._b_enc_sub = self.clt.b_enc[:, idx].to(
+            self.device, dtype=dtype, non_blocking=True
+        )  # [L, F]
+        self._threshold_sub = torch.exp(self.clt.log_threshold[:, idx]).to(
+            self.device, dtype=dtype, non_blocking=True
+        )  # [L, F]
+        self._bandwidth = self.clt.bandwidth
 
-#     def _reshape_latents(self, feat_acts, tokens):
-#         N = feat_acts.shape[0]
-#         ctx = self.ctx
-#         if N % ctx != 0:
-#             excess = N % ctx
-#             feat_acts = feat_acts[:-excess]
-#             tokens = tokens[:-excess]
+    @torch.no_grad()
+    def _encode_subset(self, x: torch.Tensor) -> torch.Tensor:
+        """x: [B, L, d_in] → [B, L, F]  (all on GPU)"""
+        hidden_pre = (
+            torch.einsum("bld,ldf->blf", x, self._W_enc_sub) + self._b_enc_sub
+        )
+        return JumpReLU.apply(hidden_pre, self._threshold_sub, self._bandwidth)
 
-#         if feat_acts.shape[0] == 0:
-#             return feat_acts, tokens
+    def _stream_and_build_topk(
+        self, *, top_k: int, run_dtype: torch.dtype
+    ) -> Dict[str, Any]:
+        """One pass over the data: encode and accumulate per-feature top-K."""
+        state: Optional[Dict[str, Any]] = None
+        n_tokens = 0
+        iterator = iter(self.activations_store)
+        log_every = max(1, self.cfg.total_autointerp_tokens // 20)
 
-#         N_seq = feat_acts.shape[0] // ctx
-#         feat_acts = feat_acts.view(N_seq, ctx, *feat_acts.shape[1:])
-#         tokens = tokens.view(N_seq, ctx)
-#         return feat_acts, tokens
+        while n_tokens < self.cfg.total_autointerp_tokens:
+            tokens_cpu, acts_in, _ = next(iterator)
+            x = acts_in.to(self.device, dtype=run_dtype)
 
-#     def save_feature_frequency(self):
-#         feature_frequency = {}
-#         for layer in range(self.model.cfg.n_layers):
-#             layer_dir = Path(self.cfg.latent_cache_path) / f"layer_{layer}"
+            with torch.no_grad():
+                feat_act = self._encode_subset(x)  # [B, L, F]
 
-#             # Find all chunk files
-#             chunk_files = sorted(layer_dir.glob("chunk_*.safetensors"))
-#             if not chunk_files:
-#                 print(f"No chunks found for layer {layer}", flush=True)
-#                 continue
+            tokens_seq, acts_seq = self._to_sequences(tokens_cpu, feat_act)
+            n_tokens += int(feat_act.shape[0])
 
-#             chunk_files = chunk_files[:1]
+            if tokens_seq.shape[0] > 0:
+                if state is None:
+                    state = self._init_topk_state(
+                        n_layers=int(acts_seq.shape[2]),
+                        F=len(self._index_list),
+                        top_k=top_k,
+                        ctx=self.ctx,
+                        dtype=run_dtype,
+                        device=self.device,
+                    )
+                self._update_state(
+                    state=state,
+                    tokens_seq=tokens_seq,
+                    acts_seq=acts_seq,
+                    top_k=top_k,
+                )
 
-#             print(f"Processing layer {layer}: {len(chunk_files)} chunks", flush=True)
+            del x, feat_act, acts_seq
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
 
-#             # Accumulate statistics across all chunks
-#             total_sum = None
-#             total_count = 0
+            if n_tokens % log_every < self.cfg.train_batch_size_tokens:
+                logger.info(
+                    f"  {n_tokens:,} / {self.cfg.total_autointerp_tokens:,} tokens"
+                )
 
-#             for chunk_file in chunk_files:
-#                 data = load_file(chunk_file)
-#                 activations = data["activations"]  # [N_seq, ctx, d_latent]
+        if state is None:
+            raise RuntimeError("No data was processed — check ActivationsStore setup.")
+        return state
 
-#                 # Sum of active features
-#                 active_sum = (activations > 0).float().sum(dim=(0, 1))  # [d_latent]
+    def _to_sequences(
+        self, tokens_cpu: torch.Tensor, feat_act_gpu: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Reshape flat token/activation arrays into context-sized sequences.
 
-#                 if total_sum is None:
-#                     total_sum = active_sum
-#                 else:
-#                     total_sum += active_sum
+        tokens_cpu:   [B]          (CPU)
+        feat_act_gpu: [B, L, F]   (GPU)
 
-#                 # Count total positions
-#                 total_count += activations.shape[0] * activations.shape[1]
+        returns:
+            tokens_seq: [B_seq, ctx]        (CPU)
+            acts_seq:   [B_seq, ctx, L, F]  (GPU)
+        """
+        B = int(feat_act_gpu.shape[0])
+        excess = B % self.ctx
+        if excess:
+            feat_act_gpu = feat_act_gpu[:-excess]
+            tokens_cpu = tokens_cpu[:-excess]
+            B -= excess
 
-#             # Compute mean frequency
-#             feature_frequency[layer] = (total_sum / total_count).cpu().tolist()
+        if B == 0:
+            L, F = feat_act_gpu.shape[1], feat_act_gpu.shape[2]
+            return (
+                tokens_cpu.new_zeros((0, self.ctx)),
+                feat_act_gpu.new_zeros((0, self.ctx, L, F)),
+            )
 
-#         # Save the results
-#         with open(os.path.join(self.cfg.latent_cache_path, "feature_frequency.json"), "w") as f:
-#             json.dump(feature_frequency, f)
-#         print(f"Feature frequency saved to {os.path.join(self.cfg.latent_cache_path, 'feature_frequency.json')}", flush=True)
+        B_seq = B // self.ctx
+        tokens_seq = tokens_cpu.view(B_seq, self.ctx)
+        acts_seq = feat_act_gpu.view(
+            B_seq, self.ctx, feat_act_gpu.shape[1], feat_act_gpu.shape[2]
+        )
+        return tokens_seq, acts_seq
 
+    @staticmethod
+    def _init_topk_state(
+        *,
+        n_layers: int,
+        F: int,
+        top_k: int,
+        ctx: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> Dict[str, Any]:
+        neg_inf = torch.full((top_k, F), float("-inf"), device=device, dtype=dtype)
+        tok_zero = torch.zeros((top_k, F, ctx), device=device, dtype=torch.int32)
+        act_zero = torch.zeros((top_k, F, ctx), device=device, dtype=dtype)
+        return {
+            "top_vals":   [neg_inf.clone() for _ in range(n_layers)],
+            "top_tokens": [tok_zero.clone() for _ in range(n_layers)],
+            "top_acts":   [act_zero.clone() for _ in range(n_layers)],
+            "sum_pos":    [torch.zeros(F, device=device, dtype=dtype) for _ in range(n_layers)],
+            "count_pos":  [torch.zeros(F, device=device, dtype=torch.long) for _ in range(n_layers)],
+        }
 
-#     def get_top_activating_sequences(self, layer: int, top_k: int = TOP_K_DEFAULT, index_list: Optional[List[int]] = None, compute_averages: bool = True, compute_language_distributions: bool = True):
-#         if self.cfg.latent_cache_path is None: 
-#             raise ValueError("latent_cache_path must not be none here.")
+    @torch.no_grad()
+    def _update_state(
+        self,
+        *,
+        state: Dict[str, Any],
+        tokens_seq: torch.Tensor,  # [B_seq, ctx]      CPU
+        acts_seq: torch.Tensor,    # [B_seq, ctx, L, F] GPU
+        top_k: int,
+    ) -> None:
+        B_seq = int(tokens_seq.shape[0])
+        if B_seq == 0:
+            return
 
-#         layer_dir = Path(self.cfg.latent_cache_path) / f"layer_{layer}"
-#         chunk_files = sorted(layer_dir.glob("chunk_*.safetensors"))
-        
-#         if not chunk_files:
-#             raise FileNotFoundError(f"No chunk files found in {layer_dir}")
-        
-#         d_latent: Optional[int] = None
-#         global_top_sequences: Dict[int, List[Dict]] = {}
-#         feature_stats: Dict[int, Dict[str, float]] | None = {} if compute_averages else None
-#         # Track general language distributions across all chunks for each feature
-#         general_language_distributions: Dict[int, Dict[str, int]] | None = {} if compute_language_distributions else None
-        
-#         # Use heaps for O(log k) insertions instead of O(k) sorting
-#         use_heap = top_k < 200  # Heap is more efficient for smaller k
-        
-#         for chunk_file in chunk_files:
+        tokens_gpu = tokens_seq.to(self.device, dtype=torch.int32)
+        L = int(acts_seq.shape[2])
+        F = int(acts_seq.shape[3])
+        ctx = int(acts_seq.shape[1])
 
-#             print(f"chunk file: {chunk_file}", flush=True)
-#             data = load_file(chunk_file)
-#             activations = data["activations"]  # [N_seq, ctx, d_latent]
-#             tokens = data["tokens"]  # [N_seq, ctx]
-            
-#             # Load language data from separate JSON file if available
-#             languages = None
-#             lang_file = chunk_file.parent / f"{chunk_file.stem}_languages.json"
-#             if lang_file.exists():
-#                 with open(lang_file, 'r') as f:
-#                     lang_data = json.load(f)
-#                     languages = lang_data.get("languages", None)
-            
-#             print(f"finished loading: {chunk_file}", flush=True)
+        # Broadcast token sequence across all F features: [B_seq, F, ctx]
+        batch_tokens = tokens_gpu[:, None, :].expand(B_seq, F, ctx).contiguous()
 
-#             if d_latent is None:
-#                 d_latent = activations.shape[-1]
-#                 for feat_idx in range(d_latent):
-#                     global_top_sequences[feat_idx] = []
-#                     if compute_averages and feature_stats is not None:
-#                         feature_stats[feat_idx] = {'total_activation': 0.0, 'count': 0}
-#                     if compute_language_distributions and general_language_distributions is not None:
-#                         general_language_distributions[feat_idx] = {}
-            
-#             max_vals = activations.max(dim=1).values  # [N_seq, d_latent]
-            
-#             # Pre-filter features if index_list is provided
-#             if index_list is not None:
-#                 feat_indices = torch.tensor(index_list, device=max_vals.device)
-#                 filtered_max_vals = max_vals[:, feat_indices]
-#                 filtered_activations = activations[:, :, feat_indices]
-#                 effective_indices = index_list
-#             else:
-#                 filtered_max_vals = max_vals
-#                 filtered_activations = activations
-#                 effective_indices = list(range(d_latent))
-            
-#             if compute_averages and feature_stats is not None:
-#                 positive_mask = filtered_max_vals > 0
-#                 for i, feat_idx in enumerate(effective_indices):
-#                     feat_positive = positive_mask[:, i]
-#                     if feat_positive.any():
-#                         feature_stats[feat_idx]['total_activation'] += filtered_max_vals[feat_positive, i].sum().item()
-#                         feature_stats[feat_idx]['count'] += feat_positive.sum().item()
-            
-#             # Track general language distribution for all sequences with positive activation
-#             if (compute_language_distributions and general_language_distributions is not None 
-#                 and languages is not None):
-#                 positive_mask = filtered_max_vals > 0
-#                 for i, feat_idx in enumerate(effective_indices):
-#                     feat_positive = positive_mask[:, i]
-#                     if feat_positive.any():
-#                         # Get languages for sequences with positive activation for this feature
-#                         positive_seq_indices = feat_positive.nonzero().flatten()
-#                         for seq_idx in positive_seq_indices:
-#                             seq_idx_int = seq_idx.item()
-#                             if seq_idx_int < len(languages):
-#                                 lang = languages[seq_idx_int]
-#                                 if lang not in general_language_distributions[feat_idx]:
-#                                     general_language_distributions[feat_idx][lang] = 0
-#                                 general_language_distributions[feat_idx][lang] += 1
-            
-#             for i, feat_idx in enumerate(effective_indices):
-#                 feat_max_vals = filtered_max_vals[:, i]
-                
-#                 current_size = len(global_top_sequences[feat_idx])
-#                 available_slots = max(0, top_k * 2 - current_size)  # Allow 2x buffer
-                
-#                 if available_slots > 0:
+        for layer in range(L):
+            # [B_seq, F, ctx]
+            batch_acts = acts_seq[:, :, layer, :].permute(0, 2, 1).contiguous()
+            # [B_seq, F] — max activation per sequence per feature
+            batch_vals = batch_acts.max(dim=2).values
 
-#                     n_take = min(available_slots, feat_max_vals.shape[0])
-#                     if n_take < feat_max_vals.shape[0]:
-#                         top_indices = torch.topk(feat_max_vals, n_take).indices
-#                     else:
-#                         top_indices = torch.arange(feat_max_vals.shape[0])
-                    
-#                     # Create sequence data only for top sequences with positive activation
-#                     for seq_idx in top_indices:
-#                         seq_idx = seq_idx.item()
-#                         max_val = feat_max_vals[seq_idx].item()
-#                         # Skip sequences with non-positive max activation
-#                         if max_val > 0:
-#                             seq_data = {
-#                                 'activations': filtered_activations[seq_idx, :, i],
-#                                 'tokens': tokens[seq_idx, :],
-#                                 'max_val': max_val,
-#                                 'original_seq_idx': seq_idx  # Store original sequence index for language mapping
-#                             }
-                            
-#                             # Add language info if available
-#                             if languages is not None and seq_idx < len(languages):
-#                                 seq_data['language'] = languages[seq_idx]
+            # Running stats (for average activation computation)
+            pos = batch_vals > 0
+            state["sum_pos"][layer].add_((batch_vals * pos).sum(dim=0))
+            state["count_pos"][layer].add_(pos.sum(dim=0))
 
-#                             global_top_sequences[feat_idx].append(seq_data)
-                
-#                 if len(global_top_sequences[feat_idx]) >= top_k * 2:
-#                     if use_heap:
-#                         # Convert to heap and maintain top-k (ensure scalar values)
-#                         heap_data = [(-float(item['max_val']), idx, item) for idx, item in enumerate(global_top_sequences[feat_idx])]
-#                         heapq.heapify(heap_data)
-#                         global_top_sequences[feat_idx] = [heapq.heappop(heap_data)[2] for _ in range(min(top_k, len(heap_data)))]
-#                     else:
-#                         # Use torch.topk for larger k values
-#                         all_vals = torch.tensor([float(item['max_val']) for item in global_top_sequences[feat_idx]])
-#                         top_indices = torch.topk(all_vals, top_k).indices
-#                         global_top_sequences[feat_idx] = [global_top_sequences[feat_idx][idx] for idx in top_indices.tolist()]
-                                    
-#         # Clean up chunk data after processing
-#         del activations, tokens, data, max_vals
-#         if index_list is not None:
-#             del feat_indices, filtered_max_vals, filtered_activations
-        
-#         # Final sort, filter non-positive values, and limit to top_k
-#         if d_latent is not None:
-#             for feat_idx in range(d_latent):
-#                 if index_list is not None and feat_idx not in index_list:
-#                     continue
-                
-#                 # Filter out sequences with non-positive max_val and sort
-#                 positive_sequences = [seq for seq in global_top_sequences[feat_idx] if seq['max_val'] > 0]
-#                 positive_sequences.sort(key=lambda x: x['max_val'], reverse=True)
-#                 global_top_sequences[feat_idx] = positive_sequences[:top_k]
-                
-#         self._stored_top_sequences = global_top_sequences
+            # Merge batch with current top-K, keep top-K
+            merged_vals   = torch.cat([state["top_vals"][layer],   batch_vals  ], dim=0)  # [K+B, F]
+            merged_tokens = torch.cat([state["top_tokens"][layer], batch_tokens], dim=0)  # [K+B, F, ctx]
+            merged_acts   = torch.cat([state["top_acts"][layer],   batch_acts  ], dim=0)  # [K+B, F, ctx]
 
-#         # Convert general language distributions to percentages
-#         general_lang_percentages = None
-#         if compute_language_distributions and general_language_distributions is not None and d_latent is not None:
-#             general_lang_percentages = {}
-#             for feat_idx in range(d_latent):
-#                 if index_list is not None and feat_idx not in index_list:
-#                     continue
-                
-#                 lang_counts = general_language_distributions[feat_idx]
-#                 total_count = sum(lang_counts.values())
-#                 if total_count > 0:
-#                     general_lang_percentages[feat_idx] = {
-#                         lang: count / total_count for lang, count in lang_counts.items()
-#                     }
-#                 else:
-#                     general_lang_percentages[feat_idx] = {}
+            new_vals, sel = torch.topk(merged_vals, k=top_k, dim=0)   # [K, F]
+            gather_idx = sel[:, :, None].expand(top_k, F, ctx)        # [K, F, ctx]
 
-#         if compute_averages and feature_stats is not None and d_latent is not None:
-#             feature_averages = {}
-#             for feat_idx in range(d_latent):
-#                 stats = feature_stats[feat_idx]
-#                 avg_activation = stats['total_activation'] / stats['count'] if stats['count'] > 0 else 0.0
-#                 feature_averages[feat_idx] = avg_activation
+            state["top_vals"][layer]   = new_vals
+            state["top_tokens"][layer] = torch.gather(merged_tokens, 0, gather_idx)
+            state["top_acts"][layer]   = torch.gather(merged_acts,   0, gather_idx)
 
-#             self._stored_feature_averages = feature_averages
-        
-#         # Store general language distributions for later use
-#         if general_lang_percentages is not None:
-#             self._stored_general_language_distributions = general_lang_percentages
-        
-#         # Return values based on what was computed
-#         result = [global_top_sequences]
-        
-#         if compute_averages and feature_stats is not None:
-#             result.append(feature_averages)
-        
-#         if compute_language_distributions and general_lang_percentages is not None:
-#             result.append(general_lang_percentages)
-        
-#         return tuple(result) if len(result) > 1 else result[0]
+        del tokens_gpu, batch_tokens
+
+    def _state_to_feature_dicts(
+        self,
+        *,
+        state: Dict[str, Any],
+        index_list: List[int],
+        top_k: int,
+    ) -> List[Dict[str, Dict[str, Any]]]:
+        """
+        Returns a list of length n_layers.
+        Each element is {str(feat_id): feature_dict} for that layer.
+        String keys are used for JSON compatibility.
+        """
+        tokenizer = self.model.tokenizer
+        n_layers = len(state["top_vals"])
+        result: List[Dict[str, Dict[str, Any]]] = [{} for _ in range(n_layers)]
+
+        for layer in range(n_layers):
+            top_vals   = state["top_vals"][layer].cpu()    # [K, F]
+            top_tokens = state["top_tokens"][layer].cpu()  # [K, F, ctx]
+            top_acts   = state["top_acts"][layer].cpu()    # [K, F, ctx]
+            sum_pos    = state["sum_pos"][layer].cpu()     # [F]
+            count_pos  = state["count_pos"][layer].cpu()   # [F]
+
+            for j, feat_id in enumerate(index_list):
+                # Collect non-trivial top sequences (descending order from topk)
+                sequences: List[Dict[str, Any]] = []
+                for k in range(top_k):
+                    v = float(top_vals[k, j])
+                    if v == float("-inf") or v <= 0:
+                        break  # remaining slots are unfilled or zero
+                    sequences.append(
+                        {
+                            "tokens":      top_tokens[k, j],
+                            "activations": top_acts[k, j],
+                            "max_val":     v,
+                        }
+                    )
+
+                top_examples: List[str] = []
+                sequences_serializable: List[Dict[str, Any]] = []
+                for s in sequences:
+                    tks  = s["tokens"][1:]       # drop BOS token
+                    acts = s["activations"][1:]  # drop BOS
+                    top_examples.append(highlight_activations(tks, acts, tokenizer))
+                    sequences_serializable.append(
+                        {
+                            "tokens":      s["tokens"].tolist(),
+                            "activations": s["activations"].tolist(),
+                            "max_val":     float(s["max_val"]),
+                        }
+                    )
+
+                c = int(count_pos[j])
+                avg_activation = float(sum_pos[j]) / c if c > 0 else 0.0
+
+                result[layer][str(feat_id)] = {
+                    "layer":                 int(layer),
+                    "feature_index":         int(feat_id),
+                    "average_activation":    avg_activation,
+                    "top_examples":          top_examples,
+                    "top_examples_tks":      sequences_serializable,
+                    "top_activating_tokens": _get_top_activating_tokens(
+                        sequences=sequences,
+                        tokenizer=tokenizer,
+                        top_k=self.cfg.n_top_activating_tokens_shown,
+                    ),
+                    "description":           "Unknown",
+                    "explanation":           "No explanation generated",
+                    "raw_explanation":       "",
+                }
+
+        return result
     
-#     def generate_prompts_for_layer(self, layer: int, top_k: int = TOP_K_DEFAULT, index_list: Optional[List[int]] = None):
-#         print("starting top activation list", flush=True)
-#         compute_lang_dist = "causal" in self.cfg.model_name
-#         result = self.get_top_activating_sequences(layer, top_k, index_list, compute_language_distributions=compute_lang_dist)
-#         top_sequences = result[0]  # First element is always top_sequences
-#         d_latent = len(top_sequences)
-        
-#         if self.cfg.latent_cache_path is None: 
-#             raise ValueError("latent_cache_path must not be none here.")
-#         prompt_dir = Path(self.cfg.latent_cache_path) / PROMPTS_FOLDERNAME / f"layer{layer}"
-#         prompt_dir.mkdir(parents=True, exist_ok=True)
-        
-#         tokenizer = self.model.tokenizer
+    def _save_features(
+        self,
+        *,
+        feature_dicts_by_layer: List[Dict[str, Dict[str, Any]]],
+        job_id: int,
+        save_dir: Path,
+    ) -> Path:
+        backend = getattr(self.cfg, "storage_backend", "parquet")
 
-#         print("starting the iteration", flush = True)
-#         print("index list:")
+        if backend == "sqlite":
+            return self._save_to_sqlite(
+                feature_dicts_by_layer=feature_dicts_by_layer,
+                job_id=job_id,
+                save_dir=save_dir,
+            )
+        if backend == "lmdb":
+            return self._save_to_lmdb(
+                feature_dicts_by_layer=feature_dicts_by_layer,
+                job_id=job_id,
+                save_dir=save_dir,
+            )
+        if backend == "parquet":
+            return self._save_to_parquet(
+                feature_dicts_by_layer=feature_dicts_by_layer,
+                job_id=job_id,
+                save_dir=save_dir,
+            )
 
-#         for feat_idx in range(d_latent):
-#             # Skip features not in the index_list if index_list is provided
-#             if index_list is not None and feat_idx not in index_list:
-#                 continue
-#             print(f"Generating prompt for feature: {feat_idx}", flush=True)
+        raise ValueError(f"Unknown storage_backend: {backend}")
 
-#             sequences = top_sequences[feat_idx]
-            
-#             # Always sample exactly 50% of top_k: keep first 10% + randomly sample to reach 50% total
-#             target_size = top_k // 2  # Exactly 50% of top_k
-#             if len(sequences) >= target_size:
-#                 top_10_percent_size = max(1, target_size // 5)  # 10% of target (which is 5% of top_k)
-                
-#                 # Keep top 10% of target
-#                 sampled_sequences = sequences[:top_10_percent_size]
-                
-#                 # Randomly sample from remaining to reach exactly 50% of top_k
-#                 remaining_needed = target_size - top_10_percent_size
-#                 if remaining_needed > 0 and len(sequences) > top_10_percent_size:
-#                     remaining_sequences = sequences[top_10_percent_size:]
-#                     remaining_indices = sorted(random.sample(range(len(remaining_sequences)), 
-#                                                            min(remaining_needed, len(remaining_sequences))))
-#                     sampled_sequences.extend([remaining_sequences[i] for i in remaining_indices])
-#             else:
-#                 sampled_sequences = sequences
+    def _save_to_parquet(
+        self,
+        *,
+        feature_dicts_by_layer: List[Dict[str, Dict[str, Any]]],
+        job_id: int,
+        save_dir: Path,
+    ) -> Path:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import pandas as pd
+        import json
 
-#             top_texts = []
-#             for seq_data in sampled_sequences:
-#                 tokens = seq_data['tokens'][1:]  # Remove BOS
-#                 activations = seq_data['activations'][1:]  # Remove BOS
-#                 highlighted_text = highlight_activations(tokens, activations, tokenizer)
-#                 top_texts.append(highlighted_text)
-            
-#             if "CausalNLP" in self.cfg.model_name: 
-#                 prompt = generate_prompt_multilingual(top_texts, layer, feat_idx)
-#             else: 
-#                 prompt = generate_prompt(top_texts, layer, feat_idx)
+        out_dir = save_dir / "parquet"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"job_{job_id}.parquet"
 
-#             explanation_path = prompt_dir / f"explanation_{feat_idx}.txt"
-#             with open(explanation_path, "w") as f:
-#                 f.write(prompt)
+        rows = []
+        for layer_dicts in feature_dicts_by_layer:
+            for d in layer_dicts.values():
+                rows.append(
+                    {
+                        "layer": int(d["layer"]),
+                        "feature_id": int(d["feature_index"]),
+                        "average_activation": float(d["average_activation"]),
+                        # store nested stuff as json text (easy + portable)
+                        "top_examples": json.dumps(d["top_examples"]),
+                        "top_examples_tks": json.dumps(d["top_examples_tks"]),
+                        "top_activating_tokens": json.dumps(d["top_activating_tokens"]),
+                        "description": d["description"],
+                        "explanation": d["explanation"],
+                        "raw_explanation": d["raw_explanation"],
+                    }
+                )
 
-#         self._stored_top_sequences = top_sequences
-#         logger.info(f"Generated {d_latent} prompts for layer {layer}")
+        df = pd.DataFrame(rows)
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        pq.write_table(table, path, compression="zstd")
 
-#     def generate_explanations_from_prompts(self, layer: int, index_list: Optional[List[int]] = None):
-#         if self.cfg.latent_cache_path is None: 
-#             raise ValueError("latent_cache_path must not be none here.")
-        
-#         PROMPT_DIR = Path(self.cfg.latent_cache_path) / PROMPTS_FOLDERNAME / f"layer{layer}"
-#         OUT_DIR = Path(self.cfg.latent_cache_path) / EXPLANATIONS_FOLDERNAME / f"layer{layer}"
-#         OUT_DIR.mkdir(parents=True, exist_ok=True)
+        logger.info(f"[Job {job_id}] Saved {len(rows)} features → {path}")
+        return path
 
-#         # Filter prompts based on index_list if provided
-#         all_prompts = sorted(PROMPT_DIR.glob("*.txt"))
-#         if index_list is not None:
-#             filtered_prompts = [
-#                 prompt for prompt in all_prompts
-#                 if int(prompt.stem.split("_")[-1]) in index_list
-#             ]
-#         else:
-#             filtered_prompts = all_prompts
+    def _save_to_lmdb(
+        self,
+        *,
+        feature_dicts_by_layer: List[Dict[str, Dict[str, Any]]],
+        job_id: int,
+        save_dir: Path,
+    ) -> Path:
+        import lmdb
+        import pickle
 
-#         logger.info(f"Found {len(filtered_prompts)} prompts in {PROMPT_DIR} matching index list")
+        db_path = save_dir / f"job_{job_id}.lmdb"
 
-#         print(filtered_prompts, flush=True)
+        # Map size must be large enough (e.g. 10GB here — adjust if needed)
+        env = lmdb.open(
+            str(db_path),
+            map_size=10 * 1024**3,
+            subdir=False,
+            readonly=False,
+            meminit=False,
+            map_async=True,
+        )
 
-#         run_client(
-#             prompts=filtered_prompts, 
-#             out_dir=OUT_DIR, 
-#             vllm_model=self.cfg.vllm_model, 
-#             vllm_max_tokens=self.cfg.vllm_max_tokens
-#         )
+        with env.begin(write=True) as txn:
+            count = 0
+            for layer_dicts in feature_dicts_by_layer:
+                for d in layer_dicts.values():
+                    key = f"{d['layer']}:{d['feature_index']}".encode()
+                    value = pickle.dumps(d)
+                    txn.put(key, value)
+                    count += 1
 
-#     def generate_feature_dictionaries(self, layer: int,  index_list: Optional[List[int]] = None):
-#         if self.cfg.latent_cache_path is None: 
-#             raise ValueError("latent_cache_path must not be none here.")
-        
-#         explanations_dir = Path(self.cfg.latent_cache_path) / EXPLANATIONS_FOLDERNAME / f"layer{layer}"
-#         out_dir = Path(self.cfg.latent_cache_path) / DICT_FOLDERNAME / f"layer{layer}"
-#         out_dir.mkdir(parents=True, exist_ok=True)
+        env.sync()
+        env.close()
 
-#         if hasattr(self, '_stored_top_sequences'):
-#             top_sequences = self._stored_top_sequences
-#             feature_averages = self._stored_feature_averages
-#             general_language_distributions = getattr(self, '_stored_general_language_distributions', None)
-#         else:
-#             logger.warning("No stored top sequences found, loading again...")
-#             compute_lang_dist = "CausalNLP" in self.cfg.model_name ### TODO: remove this 
-#             result = self.get_top_activating_sequences(layer, top_k=TOP_K_DEFAULT, index_list=index_list, compute_language_distributions=compute_lang_dist)
-            
-#             if isinstance(result, tuple):
-#                 top_sequences = result[0]
-#                 feature_averages = result[1] if len(result) > 1 else None
-#                 general_language_distributions = result[2] if len(result) > 2 else None
-#             else:
-#                 top_sequences = result
-#                 feature_averages = None
-#                 general_language_distributions = None
+        logger.info(f"[Job {job_id}] Saved {count} features → {db_path}")
+        return db_path
 
-#         d_latent = len(top_sequences)
-#         tokenizer = self.model.tokenizer
-#         comprehensive_explanations = {}
-        
-#         for feat_idx in range(d_latent):
-#             # Skip features not in the index_list if index_list is provided
-#             if index_list is not None and feat_idx not in index_list:
-#                 continue
+    def _save_to_sqlite(
+        self,
+        *,
+        feature_dicts_by_layer: List[Dict[str, Dict[str, Any]]],
+        job_id: int,
+        save_dir: Path,
+    ) -> Path:
+        """
+        Persist all features for this job in a single SQLite database.
 
-#             explanation_file = explanations_dir / f"explanation_{feat_idx}.txt"
-#             if explanation_file.exists():
-#                 raw_explanation = explanation_file.read_text().strip()
-#                 description, explanation = self._parse_explanation(raw_explanation)
-#             else:
-#                 description, explanation = "Unknown", "No explanation generated"
-#                 raw_explanation = ""
+        Output: save_dir/job_{job_id}.db  — one file per job regardless of
+        how many layers or features it contains.
 
-#             sequences = top_sequences[feat_idx]
-            
-#             top_examples = []
-#             for seq_data in sequences:
-#                 tokens = seq_data['tokens'][1:]  # Remove BOS
-#                 activations = seq_data['activations'][1:]  # Remove BOS
-#                 highlighted_text = highlight_activations(
-#                     tokens, 
-#                     activations, 
-#                     tokenizer,
-#                     threshold_ratio=0.6
-#                 )
-#                 top_examples.append(highlighted_text)
+        Query specific features later with load_features(db_path, layer, [ids]).
+        Merge all jobs with merge_job_databases([...], output_db_path).
+        """
 
-#             if sequences: 
-#                 # Get top activating tokens from the top sequences only
-#                 top_activating_tokens = self._get_top_activating_tokens_from_sequences(
-#                     sequences, tokenizer, top_k=N_TOP_ACTIVATING_TOKENS_SHOWN
-#                 )
-#             else:
-#                 # Dead feature - no sequences
-#                 top_activating_tokens = []
-            
-#             # Convert tensors to lists for JSON serialization  
-#             sequences_serializable = []
-#             for seq_data in sequences:
-#                 sequences_serializable.append({
-#                     'activations': seq_data['activations'].tolist(),
-#                     'tokens': seq_data['tokens'].tolist(),
-#                     'max_val': seq_data['max_val']
-#                 })
-            
-#             feature_dict = {
-#                 "layer": layer,
-#                 "feature_index": feat_idx,
-#                 "description": description,
-#                 "explanation": explanation,
-#                 "top_examples": top_examples,
-#                 "top_examples_tks": sequences_serializable,
-#                 "average_activation": float(feature_averages[feat_idx]) if feature_averages else 0.0,
-#                 "top_activating_tokens": top_activating_tokens,
-#                 "raw_explanation": raw_explanation
-#             }
-                        
-#             if ("CausalNLP" in self.cfg.model_name) and sequences:
-#                 # Top sequences language distribution (existing behavior)
-#                 lang_counts: dict[str, int] = {}
-#                 for i, seq_data in enumerate(sequences):
-#                     print(seq_data, flush=True)
-#                     lang = seq_data['language']
-#                     lang_counts[lang] = lang_counts.get(lang, 0) + 1
-            
-#                 total_count = sum(lang_counts.values())
-#                 lang_dist = {lang: count / total_count for lang, count in lang_counts.items()}
-#                 feature_dict["language_distribution"] = lang_dist
-                
-#                 # General language distribution across all chunks (new behavior)
-#                 if general_language_distributions and feat_idx in general_language_distributions:
-#                     feature_dict["general_language_distribution"] = general_language_distributions[feat_idx]
-#                 else:
-#                     feature_dict["general_language_distribution"] = {}
-            
-#             comprehensive_explanations[feat_idx] = feature_dict
-            
-#             feature_file = out_dir / f"feature_{feat_idx}_complete.json"
-#             with open(feature_file, 'w') as f:
-#                 json.dump(feature_dict, f, indent=2)
-                
-#         # Delete cache files
-#         if index_list:
-#             last_idx = max(index_list)
-#             cache_dir = Path(self.cfg.latent_cache_path) / "stored_cache"
-#             seq_file = cache_dir / f"sequences_layer_{layer}_feat_{last_idx}.pkl"
-#             avg_file = cache_dir / f"averages_layer_{layer}_feat_{last_idx}.pkl"
-            
-#             if seq_file.exists():
-#                 seq_file.unlink()
-#             if avg_file.exists():
-#                 avg_file.unlink()
+        db_path = save_dir / f"job_{job_id}.db"
+        con = sqlite3.connect(db_path)
+        con.execute(_FEATURES_TABLE_DDL)
 
-#     def scoring(self, layer: int, index_list: Optional[List[int]] = None): 
-#         if self.cfg.latent_cache_path is None: 
-#             raise ValueError("latent_cache_path must not be none here.")
-        
-#         out_dir = Path(self.cfg.latent_cache_path) / DICT_FOLDERNAME / f"layer{layer}"
-#         out_dir.mkdir(parents=True, exist_ok=True)
+        rows = [
+            (
+                d["layer"],
+                d["feature_index"],
+                d["average_activation"],
+                json.dumps(d["top_examples"]),
+                json.dumps(d["top_examples_tks"]),
+                json.dumps(d["top_activating_tokens"]),
+                d["description"],
+                d["explanation"],
+                d["raw_explanation"],
+            )
+            for layer_dicts in feature_dicts_by_layer
+            for d in layer_dicts.values()
+        ]
 
-#         for feat_idx in range(self.clt.d_latent):
+        con.executemany(
+            "INSERT OR REPLACE INTO features VALUES (?,?,?,?,?,?,?,?,?)", rows
+        )
+        con.commit()
+        con.close()
 
-#             if index_list is not None and feat_idx not in index_list: 
-#                 continue
+        logger.info(f"[Job {job_id}] Saved {len(rows)} features → {db_path}")
+        return db_path
 
-#             # Load the dictionary 
-#             dict_file = out_dir / f"feature_{feat_idx}_complete.json"
-#             if dict_file.exists():
-#                 with open(dict_file, 'r') as f:
-#                     feature_dict = json.load(f)
+    def _generate_and_add_explanations(
+        self,
+        *,
+        feature_dicts_by_layer: List[Dict[str, Dict[str, Any]]],
+        job_id: int,
+        save_dir: Path,
+    ) -> None:
+        """
+        Build prompts in-memory, run vLLM, parse responses, patch the
+        in-memory dicts, and re-save using the configured storage backend.
+        """
+        from circuitlab.autointerp.client import run_client # only import VLLM if needed
+        from circuitlab.autointerp.prompt import generate_prompt
 
-#             # Get the top activating sequences 
-#             top_sequences = feature_dict.get("top_examples")
+        prompt_texts: List[str] = []
+        feat_layer_keys: List[Tuple[int, str]] = []
 
-#             # Sample half for prompts, and half for testing
-#             len(top_sequences) // 2  # Calculate target size but don't store in unused variable
+        for layer, layer_dicts in enumerate(feature_dicts_by_layer):
+            for feat_key, feat_dict in layer_dicts.items():
+                if not feat_dict["top_examples"]:
+                    continue  # dead feature — skip
+                prompt_texts.append(
+                    generate_prompt(feat_dict["top_examples"], layer, int(feat_key))
+                )
+                feat_layer_keys.append((layer, feat_key))
+
+        if not prompt_texts:
+            logger.info(f"[Job {job_id}] No live features — skipping vLLM.")
+            return
+
+        explanations = run_client(
+            prompts=prompt_texts,
+            vllm_model=self.cfg.vllm_model,
+            vllm_max_tokens=self.cfg.vllm_max_tokens,
+        )
+
+        for raw, (layer, feat_key) in zip(explanations, feat_layer_keys):
+            desc, expl = _parse_explanation(raw)
+            d = feature_dicts_by_layer[layer][feat_key]
+            d["raw_explanation"] = raw
+            d["description"]     = desc
+            d["explanation"]     = expl
+
+        # Re-save to SQLite with explanations filled in
+        self._save_features(
+            feature_dicts_by_layer=feature_dicts_by_layer,
+            job_id=job_id,
+            save_dir=save_dir,
+        )
+
+def highlight_activations(
+    tokens: torch.Tensor,
+    activations: torch.Tensor,
+    tokenizer,
+    threshold_ratio: float = 0.6,
+) -> str:
+    """
+    Build a text string with <<highlighted>> spans around the most active tokens.
+    Handles Chinese text (no word-boundary extension) vs. Latin scripts.
+    """
+    assert len(tokens) == len(activations), "Token/activation length mismatch."
+    if activations.numel() == 0:
+        return ""
+
+    max_act = float(activations.max())
+    if max_act <= 0:
+        return tokenizer.decode(tokens.tolist())
+
+    threshold = max_act * threshold_ratio
+    str_tokens = tokenizer.convert_ids_to_tokens(tokens.tolist())
+    highlight_mask = (activations > threshold).tolist()
+
+    def _contains_chinese(text: str) -> bool:
+        return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+    sample = tokenizer.convert_tokens_to_string(str_tokens[: min(10, len(str_tokens))])
+    is_chinese = _contains_chinese(sample)
+
+    extended = list(highlight_mask)
+    if not is_chinese:
+        WORD_STARTS = {"▁", " ", "Ġ"}
+        SPECIAL = {"<|endoftext|>", "</s>", "<s>", "[CLS]", "[SEP]"}
+        for i in range(len(str_tokens)):
+            if not highlight_mask[i]:
+                continue
+            # Extend backwards to word start
+            j = i - 1
+            while (
+                j >= 0
+                and str_tokens[j][:1] not in WORD_STARTS
+                and str_tokens[j] not in SPECIAL
+            ):
+                extended[j] = True
+                j -= 1
+            # Extend forwards to word end
+            j = i + 1
+            while (
+                j < len(str_tokens)
+                and str_tokens[j][:1] not in WORD_STARTS
+                and str_tokens[j] not in SPECIAL
+            ):
+                extended[j] = True
+                j += 1
+
+    # Build marked token list
+    marked: List[str] = []
+    in_hl = False
+    for tok, hi in zip(str_tokens, extended):
+        if hi and not in_hl:
+            marked.append("<<")
+            in_hl = True
+        elif not hi and in_hl:
+            marked.append(">>")
+            in_hl = False
+        marked.append(tok)
+    if in_hl:
+        marked.append(">>")
+
+    # Merge token subwords back into strings
+    segments: List[str] = []
+    buf: List[str] = []
+    for tok in marked:
+        if tok in {"<<", ">>"}:
+            if buf:
+                segments.append(tokenizer.convert_tokens_to_string(buf))
+                buf = []
+            segments.append(tok)
+        else:
+            buf.append(tok)
+    if buf:
+        segments.append(tokenizer.convert_tokens_to_string(buf))
+
+    # Assemble final string
+    result = ""
+    i = 0
+    while i < len(segments):
+        seg = segments[i]
+        if seg == "<<":
+            if result and not result.endswith(" "):
+                result += " "
+            result += "<<"
+            i += 1
+            if i < len(segments):
+                result += segments[i].lstrip()
+                i += 1
+            if i < len(segments) and segments[i] == ">>":
+                result += ">>"
+                i += 1
+        else:
+            if result and not result.endswith(" "):
+                result += " "
+            result += seg
+            i += 1
+
+    return result
+
+def _get_top_activating_tokens(
+    *,
+    sequences: List[Dict[str, Any]],
+    tokenizer,
+    top_k: int = 4,
+    threshold_ratio: float = 0.6,
+) -> List[Dict[str, Any]]:
+    """Return the most frequently highly-active tokens across top sequences."""
+    if not sequences:
+        return []
+
+    all_tks  = torch.cat([s["tokens"][1:]      for s in sequences])
+    all_acts = torch.cat([s["activations"][1:] for s in sequences])
+
+    if all_acts.numel() == 0:
+        return []
+
+    thresh = float(all_acts.max()) * threshold_ratio
+    mask = all_acts > thresh
+
+    stats: Dict[int, Dict[str, float]] = {}
+    for tid, act in zip(all_tks[mask].tolist(), all_acts[mask].tolist()):
+        if tid not in stats:
+            stats[tid] = {"count": 0.0, "total": 0.0}
+        stats[tid]["count"] += 1.0
+        stats[tid]["total"] += float(act)
+
+    ranking = [
+        {
+            "token":              tokenizer.decode([int(tid)]),
+            "token_id":           int(tid),
+            "frequency":          int(v["count"]),
+            "average_activation": v["total"] / v["count"],
+        }
+        for tid, v in stats.items()
+    ]
+    ranking.sort(key=lambda x: x["frequency"], reverse=True)
+    return ranking[:top_k]
 
 
-#     def _parse_explanation(self, raw_text: str) -> tuple[str, str]:
-#         # For simplified format, the entire raw_text is both description and explanation
-#         explanation = raw_text.strip()
-#         description = explanation  # Use the whole explanation as description too
-        
-#         return description, explanation
+def _parse_explanation(raw: str) -> Tuple[str, str]:
+    """Parse the [DESCRIPTION]: / [EXPLANATION]: response format."""
+    description = "Unknown"
+    explanation = raw
+    for line in raw.splitlines():
+        if line.startswith("[DESCRIPTION]:"):
+            description = line[len("[DESCRIPTION]:"):].strip()
+        elif line.startswith("[EXPLANATION]:"):
+            explanation = line[len("[EXPLANATION]:"):].strip()
+    return description, explanation
 
-#     def _get_top_activating_tokens_from_sequences(
-#         self, 
-#         sequences: list, 
-#         tokenizer,
-#         top_k: int = 3
-#     ) -> list[dict]:
-#         all_tokens = []
-#         all_activations = []
-        
-#         for seq_data in sequences:
-#             tokens = seq_data['tokens'][1:]  # Remove BOS
-#             activations = seq_data['activations'][1:]  # Remove BOS
-#             all_tokens.append(tokens)
-#             all_activations.append(activations)
-        
-#         # Combine all tokens and activations
-#         combined_tokens = torch.cat(all_tokens)
-#         combined_activations = torch.cat(all_activations)
-        
-#         threshold = combined_activations.max() * 0.6 
-#         high_activation_mask = combined_activations > threshold
-        
-#         activating_tokens = combined_tokens[high_activation_mask]
-#         activating_values = combined_activations[high_activation_mask]
-        
-#         token_stats = {}
-#         for token_id, activation in zip(activating_tokens, activating_values):
-#             token_id = token_id.item()
-#             activation = activation.item()
-            
-#             if token_id not in token_stats:
-#                 token_stats[token_id] = {"count": 0, "total_activation": 0.0}
-            
-#             token_stats[token_id]["count"] += 1
-#             token_stats[token_id]["total_activation"] += activation
-        
-#         token_ranking = []
-#         for token_id, stats in token_stats.items():
-#             avg_activation = stats["total_activation"] / stats["count"]
-#             token_text = tokenizer.decode([token_id])
-            
-#             token_ranking.append({
-#                 "token": token_text,
-#                 "token_id": token_id,
-#                 "frequency": stats["count"],
-#                 "average_activation": avg_activation
-#             })
-        
-#         token_ranking.sort(key=lambda x: x["frequency"], reverse=True)
-#         return token_ranking[:top_k]
+### Public utilities for loading and merging results
 
-# def highlight_activations(tokens: torch.Tensor, activations: torch.Tensor, tokenizer, threshold_ratio: float = 0.6) -> str:
-#     assert len(tokens) == len(activations), "Token and activation lengths must match"
+def load_features_parquet(
+    root: Path,
+    layer: int,
+    feature_ids: Optional[List[int]] = None,
+) -> List[Dict[str, Any]]:
+    import pyarrow.dataset as ds
+    import json
 
-#     max_act = activations.max().item()
-#     threshold = max_act * threshold_ratio
-#     str_tokens = tokenizer.convert_ids_to_tokens(tokens)
+    root = Path(root)
 
-#     # Find highlight boundaries and extend to word boundaries
-#     highlight_mask = activations > threshold
-    
-#     # Helper function to detect if text contains Chinese characters
-#     def contains_chinese(text):
-#         return any('\u4e00' <= char <= '\u9fff' for char in text)
-    
-#     # Check if we're dealing with Chinese text
-#     full_text_sample = tokenizer.convert_tokens_to_string(str_tokens[:min(10, len(str_tokens))])
-#     is_chinese_text = contains_chinese(full_text_sample)
-    
-#     # Extend highlighting to complete words, but handle Chinese differently
-#     extended_mask = highlight_mask.clone()
-    
-#     if is_chinese_text:
-#         # For Chinese text, don't extend highlighting - use exact token boundaries
-#         # This prevents over-highlighting entire sentences
-#         pass  # extended_mask remains the same as highlight_mask
-#     else:
-#         # For non-Chinese text, extend to complete words as before
-#         for i in range(len(str_tokens)):
-#             if highlight_mask[i]:
-#                 # Extend backwards to start of word
-#                 j = i - 1
-#                 while j >= 0 and not str_tokens[j].startswith(('▁', ' ', 'Ġ')) and str_tokens[j] not in ['<|endoftext|>', '</s>', '<s>', '[CLS]', '[SEP]']:
-#                     extended_mask[j] = True
-#                     j -= 1
-#                 # Extend forwards to end of word  
-#                 j = i + 1
-#                 while j < len(str_tokens) and not str_tokens[j].startswith(('▁', ' ', 'Ġ')) and str_tokens[j] not in ['<|endoftext|>', '</s>', '<s>', '[CLS]', '[SEP]']:
-#                     extended_mask[j] = True
-#                     j += 1
+    # Accept:
+    # 1) root is a parquet file
+    # 2) root is a directory containing job_*.parquet
+    # 3) root is a directory that contains a "parquet/" subdir (legacy layout)
+    if root.is_file():
+        dataset_path = root
+    else:
+        parquet_subdir = root / "parquet"
+        dataset_path = parquet_subdir if parquet_subdir.is_dir() else root
 
-#     marked_tokens = []
-#     in_highlight = False
+    dataset = ds.dataset(str(dataset_path), format="parquet")
 
-#     for i, (tok, is_high) in enumerate(zip(str_tokens, extended_mask)):
-#         if is_high and not in_highlight:
-#             marked_tokens.append("<<")
-#             in_highlight = True
-#         elif not is_high and in_highlight:
-#             marked_tokens.append(">>")
-#             in_highlight = False
+    filt = (ds.field("layer") == layer)
+    if feature_ids is not None:
+        filt = filt & ds.field("feature_id").isin(feature_ids)
 
-#         marked_tokens.append(tok)
+    table = dataset.to_table(filter=filt)
+    rows = table.to_pylist()
 
-#     if in_highlight:
-#         marked_tokens.append(">>")
+    for r in rows:
+        r["top_examples"] = json.loads(r["top_examples"])
+        r["top_examples_tks"] = json.loads(r["top_examples_tks"])
+        r["top_activating_tokens"] = json.loads(r["top_activating_tokens"])
 
-#     segments = []
-#     buffer: list[str] = []
-#     for tok in marked_tokens:
-#         if tok in {"<<", ">>"}:
-#             if buffer:
-#                 segments.append(tokenizer.convert_tokens_to_string(buffer))
-#                 buffer = []
-#             segments.append(tok)
-#         else:
-#             buffer.append(tok)
-#     if buffer:
-#         segments.append(tokenizer.convert_tokens_to_string(buffer))
+    return rows
 
-#     result = ""
-#     i = 0
-#     while i < len(segments):
-#         seg = segments[i]
-#         if seg == "<<":
-#             if result and not result.endswith(" "):
-#                 result += " "
-#             result += "<<"
-#             i += 1
-#             if i < len(segments):
-#                 result += segments[i].lstrip()
-#                 i += 1
-#             if i < len(segments) and segments[i] == ">>":
-#                 result += ">>"
-#                 i += 1
-#         else:
-#             if result and not result.endswith(" "):
-#                 result += " "
-#             result += seg
-#             i += 1
+def load_features_lmdb(
+    db_path: Path,
+    layer: int,
+    feature_ids: Optional[List[int]] = None,
+) -> List[Dict[str, Any]]:
+    import lmdb
+    import pickle
 
-#     return result
+    env = lmdb.open(str(db_path), readonly=True, lock=False, subdir=False)
+
+    results = []
+
+    with env.begin() as txn:
+        cursor = txn.cursor()
+
+        if feature_ids is None:
+            prefix = f"{layer}:".encode()
+            for key, value in cursor:
+                if key.startswith(prefix):
+                    results.append(pickle.loads(value))
+        else:
+            for fid in feature_ids:
+                key = f"{layer}:{fid}".encode()
+                value = txn.get(key)
+                if value is not None:
+                    results.append(pickle.loads(value))
+
+    env.close()
+    return results
+
+def load_features_sqlite(
+    db_path: Path,
+    layer: int,
+    feature_ids: Optional[List[int]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Load feature dicts from a job SQLite database.
+
+    Args:
+        db_path:     Path to a job_{j}.db file (or merged features.db).
+        layer:       Which CLT layer to query.
+        feature_ids: Specific feature IDs to load.  None → all for this layer.
+
+    Returns:
+        List of feature dicts with JSON fields already deserialized.
+
+    Example:
+        features = load_features(Path("save_dir/job_0.db"), layer=3)
+    """
+    import sqlite3
+
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+
+    if feature_ids is None:
+        cursor = con.execute(
+            "SELECT * FROM features WHERE layer = ?", (layer,)
+        )
+    else:
+        placeholders = ",".join("?" * len(feature_ids))
+        cursor = con.execute(
+            f"SELECT * FROM features WHERE layer = ? AND feature_id IN ({placeholders})",
+            (layer, *feature_ids),
+        )
+
+    rows = cursor.fetchall()
+    con.close()
+
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["top_examples"]          = json.loads(d["top_examples"])
+        d["top_examples_tks"]      = json.loads(d["top_examples_tks"])
+        d["top_activating_tokens"] = json.loads(d["top_activating_tokens"])
+        result.append(d)
+    return result
+
+def merge_job_lmdbs(
+    job_db_paths: List[Path],
+    output_db_path: Path,
+) -> None:
+    import lmdb
+
+    # Large map_size to avoid resize issues
+    env_out = lmdb.open(
+        str(output_db_path),
+        map_size=50 * 1024**3,  # adjust if needed
+        subdir=False,
+        readonly=False,
+        meminit=False,
+        map_async=True,
+    )
+
+    total = 0
+
+    with env_out.begin(write=True) as txn_out:
+        for db_path in job_db_paths:
+            env_in = lmdb.open(
+                str(db_path),
+                readonly=True,
+                lock=False,
+                subdir=False,
+            )
+
+            with env_in.begin() as txn_in:
+                cursor = txn_in.cursor()
+                for key, value in cursor:
+                    txn_out.put(key, value)
+                    total += 1
+
+            env_in.close()
+
+    env_out.sync()
+    env_out.close()
+
+    logger.info(f"Merged {len(job_db_paths)} LMDBs → {output_db_path}")
+    logger.info(f"Total features copied: {total}")
+
+def merge_job_databases(job_db_paths: List[Path], output_db_path: Path) -> None:
+    """
+    Merge all per-job SQLite databases into one file.
+
+    Typical use after all jobs have finished:
+        merge_job_databases(
+            sorted(save_dir.glob("job_*.db")),
+            save_dir / "features.db",
+        )
+
+    The resulting features.db supports the same load_features() queries
+    across the full feature space.
+    """
+    import sqlite3
+
+    con = sqlite3.connect(output_db_path)
+    con.execute(_FEATURES_TABLE_DDL)
+    con.commit()
+
+    for db_path in job_db_paths:
+        con.execute("ATTACH DATABASE ? AS src", (str(db_path),))
+        con.execute("INSERT OR REPLACE INTO features SELECT * FROM src.features")
+        con.execute("DETACH DATABASE src")
+        con.commit()
+
+    con.close()
+    logger.info(f"Merged {len(job_db_paths)} databases → {output_db_path}")

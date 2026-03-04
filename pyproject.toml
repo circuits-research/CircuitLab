@@ -20,6 +20,9 @@ argparse = "^1.4.0"
 zstd = "^1.5.7.3"
 zstandard = "^0.25.0"
 tqdm = "^4.67.3"
+lmdb = "^1.7.5"
+dash = "^4.0.0"
+dash-cytoscape = "^1.0.2"
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^4.2.0"

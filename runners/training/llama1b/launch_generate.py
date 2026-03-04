@@ -1,13 +1,18 @@
 import torch
 import argparse
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from circuitlab.transformer_lens.multilingual_patching import patch_official_model_names, patch_convert_hf_model_config
 from circuitlab.training.activations_store import ActivationsStore
 from circuitlab.training.compressed_activations_store import CompressionConfig
+from circuitlab.infra.jobs_id import compute_job_split_range
+from runners.training.llama1b.config import clt_training_runner_config
 
 from sae_lens.load_model import load_model
-from infra.jobs_id import compute_job_split_range
-from runners.llama1b.config import clt_training_runner_config
 
 def main(job_id: int, total_jobs: int):
     """

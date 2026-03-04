@@ -1,53 +1,65 @@
 from pydantic import BaseModel
-from typing import TypeVar
-from typing import Any, Dict, Optional
+from typing import TypeVar, Any, Dict, Optional, Literal
 
 T = TypeVar("T", bound=BaseModel)
 
-class AutoInterpConfig(BaseModel): 
-    device : str = "cuda"
+
+class AutoInterpConfig(BaseModel):
+    # ---- Device ----
+    device: str = "cuda"
     dtype: str = "float32"
-    # model 
+
+    # ---- Model ----
     model_class_name: str = "HookedTransformer"
     model_name: str = "gpt2"
     model_kwargs: Optional[Dict[str, Any]] = None
     model_from_pretrained_kwargs: Optional[Dict[str, Any]] = None
     d_in: int = 768
-    # data
-    dataset_path: str = "" # Hugging face path
+
+    # ---- Dataset ----
+    dataset_path: str = "" # HuggingFace path or local path
     is_dataset_tokenized: bool = True
+    split: str = "train" # dataset split passed to load_dataset
+    disk: bool = False  # use load_from_disk instead of load_dataset
+    is_multilingual_split_dataset: bool = False  # only for multilingual setups
+
+    # ---- ActivationsStore ----
     context_size: int = 128
-    # activations store
     n_batches_in_buffer: int = 20
     store_batch_size_prompts: int = 32
     n_train_batch_per_buffer: Optional[int] = None
     cached_activations_path: Optional[str] = None
     train_batch_size_tokens: int = 1024
-    is_multilingual_split_dataset: bool = False # can be ignored, it is only for multilingual datasets processing
-    split: str = "train" 
-    disk: bool = False # use load_from_disk instead and local dataset
-    # clt 
+
+    # ---- CLT ----
     clt_path: str = "checkpoints/gpt2"
-    # autointerp
+
+    # ---- AutoInterp ----
     total_autointerp_tokens: int = 10_000_000
     latent_cache_path: Optional[str] = None
     n_splits: int = 5
-    vllm_model: str = "meta-llama/llama-3.1-8b-instruct"
+    generate_explanations: bool = False   # set True to run vLLM explanations
+    topk: int = 100
+    n_top_activating_tokens_shown: int = 4
+    storage_backend: Literal["sqlite", "lmdb", "parquet"] = "parquet" # sqlite/lmdb gives 16GB for gpt2 expansion 32 / does not work with NFS, should load on home
+
+    # ---- vLLM (only used when generate_explanations=True) ----
+    vllm_model: str = "meta-llama/Llama-3.1-8B-Instruct"
     vllm_max_tokens: int = 3000
-    # ddp 
+
+    # ---- ActivationsStore norm estimate ----
+    n_batches_for_norm_estimate: int = 10
+
+    # ---- Distributed — all False for autointerp, but ActivationsStore reads them ----
     ddp: bool = False
     fsdp: bool = False
     feature_sharding: bool = False
 
-    # one‑liner to get a json‑safe dict
-    def to_dict(self, *, exclude_none: bool = True,**kw) -> Dict[str, Any]:
+    def to_dict(self, *, exclude_none: bool = True, **kw) -> Dict[str, Any]:
         return self.model_dump(mode="json", exclude_none=exclude_none)
 
     @classmethod
     def from_dict(cls, cfg_dict: Dict[str, Any]) -> "AutoInterpConfig":
-        """
-        counterpart to `to_dict` – parses dtype string back to torch.dtype
-        """
         return cls.model_validate(cfg_dict)
 
     @property

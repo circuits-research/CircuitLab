@@ -1,13 +1,15 @@
 import torch
-from circuitlab.attribution.attribution import AttributionRunner
 import os
+from circuitlab.attribution.attribution import AttributionRunner
+import circuitlab
+STORAGE_ROOT = Path(circuitlab.__file__).resolve().parents[2] / "storage" # symlink to scratch
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # should run on a single GPU
 
 def main():
-    clt_checkpoint = "/path/to/clt/checkpoint"
-    model_name = "gpt2"
+    MODEL = "gpt2"
+    clt_checkpoint = STORAGE_ROOT / "checkpoints" / MODEL / "d1s3fw30/middle_22137856"
 
     test_strings = [
         'The opposite of "large" is "'
@@ -15,12 +17,12 @@ def main():
 
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     # where to save the attribution_graph.pt
-    folder_name = "/home/fdraye/projects/circuitlab/save"
+    folder_name = str(STORAGE_ROOT / "attribution" / MODEL)
 
     print("Creating Attribution Runner")
     runner = AttributionRunner(
         clt_checkpoint=clt_checkpoint,
-        model_name=model_name,
+        model_name=MODEL,
         device=device,
         debug=True,
     )

@@ -1,0 +1,43 @@
+{
+  "tokens": [
+    "small",
+    "large",
+    "big",
+    "medium"
+  ],
+  "probabilities": [
+    0.2506740689277649,
+    0.06984706968069077,
+    0.022315610200166702,
+    0.01993529126048088
+  ],
+  "baseline_probabilities": [
+    0.2743891179561615,
+    0.12302305549383163,
+    0.031686969101428986,
+    0.013133901171386242
+  ],
+  "probability_differences": [
+    -0.023715049028396606,
+    -0.05317598581314087,
+    -0.009371358901262283,
+    0.006801390089094639
+  ],
+  "cluster_features": [
+    [
+      8,
+      0,
+      24300
+    ],
+    [
+      8,
+      0,
+      12588
+    ]
+  ],
+  "manual_features": [],
+  "cluster_feature_count": 2,
+  "manual_feature_count": 0,
+  "input_string": "The opposite of \"large\" is \"",
+  "cluster_intervention_value": 0.0
+}

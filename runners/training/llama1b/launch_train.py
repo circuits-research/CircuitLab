@@ -1,11 +1,14 @@
-
 from circuitlab.clt_training_runner import CLTTrainingRunner
-from runners.llama1b.config import clt_training_runner_config
 from circuitlab import logger
-
+from pathlib import Path
+import sys
 import os
 import torch
 import torch.distributed as dist
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(PROJECT_ROOT))
+from runners.training.llama1b.config import clt_training_runner_config
 
 def main():
     local_rank = int(os.environ["LOCAL_RANK"])

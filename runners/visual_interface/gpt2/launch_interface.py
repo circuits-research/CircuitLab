@@ -1,23 +1,27 @@
-import os
+"""Launch script for the frontend application."""
+
 import sys
 from pathlib import Path
 
-GRAPH_PATH = "/path/to/your/attribution_graph.pt"
-DICT_PATH = "/path/to/your/autointerp"
-PORT = 8200
+project_root = Path(__file__).parent
+src_path = project_root / "src"
+sys.path.insert(0, str(src_path))
 
-def main():
-    os.environ["ATTR_GRAPH_PATH"] = GRAPH_PATH
-    os.environ["DICT_BASE_FOLDER"] = DICT_PATH
-    os.environ["PORT"] = str(PORT)
-
-    project_root = Path(__file__).parent
-    sys.path.insert(0, str(project_root / "src"))
-
-    from circuit_tracing_visual_interface.app import main as app_main
-
-    app_main()
-
+from circuitlab.frontend.app import main
+from circuitlab.frontend.config.settings import AppConfig
+STORAGE_ROOT = Path(circuit_labb.__file__).resolve().parents[2] / "storage" # symlink to scratch
 
 if __name__ == "__main__":
-    main()
+    MODEL = "gpt2"
+    config = AppConfig(
+        attr_graph_path=STORAGE_ROOT / "attribution" / MODEL / "attribution_graph.pt",
+        dict_base_folder= STORAGE_ROOT / "autointerp" / MODEL / "dict",
+        clt_checkpoint= STORAGE_ROOT / "checkpoints" / MODEL / "d1s3fw30/middle_22137856", # only needed for interventions
+        model_name= MODEL, # only needed for interventions
+        model_class_name="HookedTransformer",
+        host="0.0.0.0",
+        port=8157,
+        debug=False,
+    )
+
+    main(config)

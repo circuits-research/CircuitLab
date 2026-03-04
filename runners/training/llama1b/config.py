@@ -1,7 +1,8 @@
 from pathlib import Path
 from circuitlab.config.clt_training_runner_config import CLTTrainingRunnerConfig
+from circuitlab.infra.wandb_utils import get_synced_wandb_id
 
-from infra.wandb_utils import get_synced_wandb_id
+STORAGE_ROOT = Path(circuit_labb.__file__).resolve().parents[2] / "storage" # symlink to scratch
 
 def clt_training_runner_config(rank: int = 0, world_size: int = 1, generation: bool = False):
     MODEL = "meta-llama/Llama-3.2-1B"
@@ -10,9 +11,8 @@ def clt_training_runner_config(rank: int = 0, world_size: int = 1, generation: b
     distributed_setup = "feature_sharding" if not generation else "None"
     
     ### IMPORTANT, where activations will be stored (around 1-2TB)
-    artifact_root = ""
-    activations_root = artifact_root / Path("activations") / MODEL
-    checkpoints_root = artifact_root / Path("checkpoints") / MODEL
+    activations_root = STORAGE_ROOT / Path("activations") / MODEL.replace("/", "_")
+    checkpoints_root = STORAGE_ROOT / Path("checkpoints") / MODEL.replace("/", "_")
 
     gradient_accumulation_steps = 4
     total_training_steps = 300_000 // world_size

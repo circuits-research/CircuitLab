@@ -16,8 +16,11 @@ poetry.lock
 logs/
 **/logs/
 
-# test 
-tests/data
+# # test, want to keep it !
+# tests/data
+
+# symlink to scratch
+storage
 
 # cache
 cache/ 

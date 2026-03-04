@@ -1,13 +1,23 @@
 <p align="center">
-  <img src="./images/image.png" alt="CLT banner" width="800"/>
+  <img src="./images/visual_interface.png" alt="CLT banner" width="800"/>
 </p>
 
-[![Python](https://img.shields.io/badge/python-3.11-blue)](https://www.python.org/)
-[![PyTorch](https://img.shields.io/badge/framework-pytorch-red)](https://pytorch.org/)
-[![Poetry](https://img.shields.io/badge/packaging-poetry-cyan)](https://python-poetry.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<p align="center">
+  <a href="https://www.python.org/">
+    <img src="https://img.shields.io/badge/python-3.11-blue">
+  </a>
+  <a href="https://pytorch.org/">
+    <img src="https://img.shields.io/badge/framework-pytorch-red">
+  </a>
+  <a href="https://python-poetry.org/">
+    <img src="https://img.shields.io/badge/packaging-poetry-cyan">
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg">
+  </a>
+</p>
 
-**CircuitLab** is a Python library for training [Cross-Layer Transcoders](https://transformer-circuits.pub/2025/attribution-graphs/methods.html) (CLTs) at scale. It will soon include an automatic intepretability pipeline and a visual interface. 
+**CircuitLab** is a Mechanistic Interpretability Toolkit for training [Cross-Layer Transcoders](https://transformer-circuits.pub/2025/attribution-graphs/methods.html) (CLTs) at scale. It will soon include an automatic intepretability pipeline and a visual interface. 
 
 We believe that a major limitation in the development of CLTs, and more broadly attribution graph methods, is the significant engineering effort required to train, analyze, and iterate on them. This library aims to reduce that overhead by providing a clean, scalable, and extensible framework.
 
