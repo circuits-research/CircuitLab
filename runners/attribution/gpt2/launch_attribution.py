@@ -1,8 +1,9 @@
 import torch
 import os
-from circuitlab.attribution.attribution import AttributionRunner
-import circuitlab
-STORAGE_ROOT = Path(circuitlab.__file__).resolve().parents[2] / "storage" # symlink to scratch
+from pathlib import Path
+from clt_forge.attribution.attribution import AttributionRunner
+import clt_forge
+STORAGE_ROOT = Path(clt_forge.__file__).resolve().parents[2] / "storage" # symlink to scratch
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # should run on a single GPU

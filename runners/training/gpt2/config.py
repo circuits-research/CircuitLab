@@ -1,9 +1,9 @@
 from pathlib import Path
-from circuitlab.config.clt_training_runner_config import CLTTrainingRunnerConfig
-from circuitlab.infra.wandb_utils import get_synced_wandb_id
+from clt_forge.config.clt_training_runner_config import CLTTrainingRunnerConfig
+from clt_forge.infra.wandb_utils import get_synced_wandb_id
 
-import circuitlab
-STORAGE_ROOT = Path(circuitlab.__file__).resolve().parents[2] / "storage" # symlink to scratch
+import clt_forge
+STORAGE_ROOT = Path(clt_forge.__file__).resolve().parents[2] / "storage" # symlink to scratch
 
 def clt_training_runner_config(rank: int = 0, world_size: int = 1, generation: bool = False):
     MODEL = "gpt2"

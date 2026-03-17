@@ -1,7 +1,7 @@
-from circuitlab.config import CLTTrainingRunnerConfig, AutoInterpConfig
+from clt_forge.config import CLTTrainingRunnerConfig, AutoInterpConfig
 from typing import Any
 import torch 
-from circuitlab.training.activations_store import ActivationsStore
+from clt_forge.training.activations_store import ActivationsStore
 from pathlib import Path
 
 TINYSTORIES_MODEL = "tiny-stories-1M"

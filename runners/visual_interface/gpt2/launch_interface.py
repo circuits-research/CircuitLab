@@ -7,9 +7,9 @@ project_root = Path(__file__).parent
 src_path = project_root / "src"
 sys.path.insert(0, str(src_path))
 
-from circuitlab.frontend.app import main
-from circuitlab.frontend.config.settings import AppConfig
-STORAGE_ROOT = Path(circuit_labb.__file__).resolve().parents[2] / "storage" # symlink to scratch
+from clt_forge.frontend.app import main
+from clt_forge.frontend.config.settings import AppConfig
+STORAGE_ROOT = Path(clt_forge.__file__).resolve().parents[2] / "storage" # symlink to scratch
 
 if __name__ == "__main__":
     MODEL = "gpt2"

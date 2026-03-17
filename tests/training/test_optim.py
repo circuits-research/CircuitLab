@@ -2,7 +2,7 @@ import torch
 import pytest
 from torch.autograd import gradcheck
 
-from circuitlab.training.optim import LearningRateScheduler, rectangle, Step, JumpReLU  # Replace with your actual module name
+from clt_forge.training.optim import LearningRateScheduler, rectangle, Step, JumpReLU  # Replace with your actual module name
 
 def test_learning_rate_scheduler_behavior():
     scheduler = LearningRateScheduler(

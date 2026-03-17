@@ -15,14 +15,14 @@ from datasets import load_dataset, load_from_disk
 from transformer_lens.hook_points import HookedRootModule
 from sae_lens.tokenization_and_batching import concat_and_batch_sequences
 
-from circuitlab.training.compressed_activations_store import (
+from clt_forge.training.compressed_activations_store import (
     CompressionConfig,
     CompressedActivationsStore,
 )
-from circuitlab.config import CLTTrainingRunnerConfig, AutoInterpConfig
-from circuitlab.utils import DummyModel, activation_split_path
-from circuitlab import logger
-from circuitlab.utils import DTYPE_MAP
+from clt_forge.config import CLTTrainingRunnerConfig, AutoInterpConfig
+from clt_forge.utils import DummyModel, activation_split_path
+from clt_forge import logger
+from clt_forge.utils import DTYPE_MAP
 from concurrent.futures import ThreadPoolExecutor, Future
 
 class ActivationsStore:

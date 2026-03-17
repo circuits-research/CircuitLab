@@ -6,12 +6,12 @@ import sqlite3
 import torch
 
 from sae_lens.load_model import load_model
-from circuitlab.config import AutoInterpConfig
-from circuitlab.clt import CLT
-from circuitlab.training.activations_store import ActivationsStore
-from circuitlab.training.optim import JumpReLU
-from circuitlab.utils import DTYPE_MAP
-from circuitlab import logger
+from clt_forge.config import AutoInterpConfig
+from clt_forge.clt import CLT
+from clt_forge.training.activations_store import ActivationsStore
+from clt_forge.training.optim import JumpReLU
+from clt_forge.utils import DTYPE_MAP
+from clt_forge import logger
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -546,8 +546,8 @@ class AutoInterp:
         Build prompts in-memory, run vLLM, parse responses, patch the
         in-memory dicts, and re-save using the configured storage backend.
         """
-        from circuitlab.autointerp.client import run_client # only import VLLM if needed
-        from circuitlab.autointerp.prompt import generate_prompt
+        from clt_forge.autointerp.client import run_client # only import VLLM if needed
+        from clt_forge.autointerp.prompt import generate_prompt
 
         prompt_texts: List[str] = []
         feat_layer_keys: List[Tuple[int, str]] = []

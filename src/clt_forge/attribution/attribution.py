@@ -1,17 +1,17 @@
-from circuitlab import logger
+from clt_forge import logger
 
-from circuitlab.attribution.loading import (
+from clt_forge.attribution.loading import (
     load_circuit_tracing_clt_from_local,
     test_clt_performance_on_prompt,
     compare_reconstruction_with_local_clt_class,
 )
-from circuitlab.attribution.intervention import (
+from clt_forge.attribution.intervention import (
     run_intervention,
     run_intervention_per_feature,
 )
 
-from circuitlab.vendor.circuit_tracer.circuit_tracer import ReplacementModel, attribute
-from circuitlab.vendor.circuit_tracer.circuit_tracer.graph import prune_graph, compute_graph_scores
+from clt_forge.vendor.circuit_tracer.circuit_tracer import ReplacementModel, attribute
+from clt_forge.vendor.circuit_tracer.circuit_tracer.graph import prune_graph, compute_graph_scores
 
 import os
 import torch

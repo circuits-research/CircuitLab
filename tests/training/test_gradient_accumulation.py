@@ -1,7 +1,7 @@
 # import torch
 # from pathlib import Path
-# from clt.config import CLTTrainingRunnerConfig
-# from clt.clt_training_runner import CLTTrainingRunner
+# from clt_forge.config import CLTTrainingRunnerConfig
+# from clt_forge.clt_training_runner import CLTTrainingRunner
 
 # """
 # To Clean

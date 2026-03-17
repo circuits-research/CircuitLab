@@ -1,9 +1,9 @@
-from circuitlab import logger
+from clt_forge import logger
 
 import torch
 from typing import List, Dict, Any, Tuple
 
-from circuitlab.vendor.circuit_tracer.circuit_tracer import ReplacementModel
+from clt_forge.vendor.circuit_tracer.circuit_tracer import ReplacementModel
 
 def _decode_top_tokens(model, probs, top_k: int):
     top_tokens = torch.topk(probs, top_k)

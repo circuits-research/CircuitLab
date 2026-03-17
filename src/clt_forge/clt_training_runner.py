@@ -11,13 +11,13 @@ from torch.distributed.fsdp import StateDictType, FullStateDictConfig
 from transformers import AutoConfig
 from sae_lens.load_model import load_model
 
-from circuitlab.transformer_lens.multilingual_patching import patch_official_model_names, patch_convert_hf_model_config
-from circuitlab.config import CLTTrainingRunnerConfig, CLTConfig
-from circuitlab.utils import DTYPE_MAP, DummyModel
-from circuitlab.clt import CLT
-from circuitlab.training.activations_store import ActivationsStore
-from circuitlab.training.clt_trainer import CLTTrainer
-from circuitlab import logger
+from clt_forge.transformer_lens.multilingual_patching import patch_official_model_names, patch_convert_hf_model_config
+from clt_forge.config import CLTTrainingRunnerConfig, CLTConfig
+from clt_forge.utils import DTYPE_MAP, DummyModel
+from clt_forge.clt import CLT
+from clt_forge.training.activations_store import ActivationsStore
+from clt_forge.training.clt_trainer import CLTTrainer
+from clt_forge import logger
 
 _missing = object()
 

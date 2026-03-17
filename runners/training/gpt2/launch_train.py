@@ -1,5 +1,5 @@
-from circuitlab.clt_training_runner import CLTTrainingRunner
-from circuitlab import logger
+from clt_forge.clt_training_runner import CLTTrainingRunner
+from clt_forge import logger
 from pathlib import Path
 import sys
 import os

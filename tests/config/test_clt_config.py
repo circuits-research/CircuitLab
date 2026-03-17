@@ -1,5 +1,5 @@
 import json
-from circuitlab.config.clt_config import CLTConfig
+from clt_forge.config.clt_config import CLTConfig
 
 # @pytest.fixture(scope="session", autouse=True)
 # def stub_torch(monkeypatch):

@@ -1,11 +1,11 @@
 import pytest
 from tests.utils import build_clt_training_runner_cfg, FakeActivationsStore
-from circuitlab.config import CLTTrainingRunnerConfig, CLTConfig
-from circuitlab.clt import CLT
+from clt_forge.config import CLTTrainingRunnerConfig, CLTConfig
+from clt_forge.clt import CLT
 from sae_lens.load_model import load_model
 import torch
-from circuitlab.training.clt_trainer import CLTTrainer
-from circuitlab.training.activations_store import ActivationsStore
+from clt_forge.training.clt_trainer import CLTTrainer
+from clt_forge.training.activations_store import ActivationsStore
 from transformer_lens.hook_points import HookedRootModule
 import wandb
 from pathlib import Path

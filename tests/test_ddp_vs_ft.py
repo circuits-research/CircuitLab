@@ -4,8 +4,8 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
-from circuitlab.config.clt_config import CLTConfig
-from circuitlab.clt import CLT
+from clt_forge.config.clt_config import CLTConfig
+from clt_forge.clt import CLT
 
 seed = 42
 

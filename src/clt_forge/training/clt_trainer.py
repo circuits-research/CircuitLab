@@ -9,12 +9,12 @@ import torch.distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from tqdm import tqdm
 
-from circuitlab.utils import DTYPE_MAP
-from circuitlab.clt import CLT, LossMetrics
-from circuitlab.training.activations_store import ActivationsStore
-from circuitlab.training.optim import LearningRateScheduler
-from circuitlab.config import CLTTrainingRunnerConfig
-from circuitlab import logger
+from clt_forge.utils import DTYPE_MAP
+from clt_forge.clt import CLT, LossMetrics
+from clt_forge.training.activations_store import ActivationsStore
+from clt_forge.training.optim import LearningRateScheduler
+from clt_forge.config import CLTTrainingRunnerConfig
+from clt_forge import logger
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

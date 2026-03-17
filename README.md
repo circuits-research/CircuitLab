@@ -17,7 +17,7 @@
   </a>
 </p>
 
-**CircuitLab** is a Mechanistic Interpretability Toolkit for jointly training [Cross-Layer Transcoders](https://transformer-circuits.pub/2025/attribution-graphs/methods.html) (CLTs), running the auto-interp, computing the attribution-graph, and interact with a visual interface. We will soon release open-source CLTs with the library (up to 8B parameters), along with automated interpretation and code for interacting with existing open-source CLTs (e.g., Gemma 2B), enabling direct comparisons within a unified framework. We are currently adding extensions for lower-compute academic budget (e.g. low-rank finetuning of CLTs, ...). 
+**CLT-Forge** is a Mechanistic Interpretability Toolkit for jointly training [Cross-Layer Transcoders](https://transformer-circuits.pub/2025/attribution-graphs/methods.html) (CLTs), running the auto-interp, computing the attribution-graph, and interact with a visual interface. We will soon release open-source CLTs with the library (up to 8B parameters), along with automated interpretation and code for interacting with existing open-source CLTs (e.g., Gemma 2B), enabling direct comparisons within a unified framework. We are currently adding extensions for lower-compute academic budget (e.g. low-rank finetuning of CLTs, ...). 
 
 We believe that a major limitation in the development of CLTs, and more broadly attribution graph methods, is the significant engineering effort required to train, analyze, and iterate on them. This library aims to reduce that overhead by providing a clean, scalable, and extensible framework for academia. 
 
@@ -26,7 +26,7 @@ We believe that a major limitation in the development of CLTs, and more broadly 
 ### 1. Generate and cache activations
 
 ``` python
-from circuitlab import ActivationsStore, clt_training_runner_config, load_model
+from clt_forge import ActivationsStore, clt_training_runner_config, load_model
 
 # Load model
 model = load_model("meta-llama/Llama-3.2-1B", device="cuda")
@@ -49,7 +49,7 @@ store.generate_and_save_activations(
 ### 2. Train the CLT
 
 ``` python
-from circuitlab import CLTTrainingRunner
+from clt_forge import CLTTrainingRunner
 
 # Train
 trainer = CLTTrainingRunner(cfg)
@@ -61,7 +61,7 @@ trainer.run()
 ### 3. Running the AutoInterp
 
 ``` python
-from circuitlab import AutoInterp, AutoInterpConfig
+from clt_forge import AutoInterp, AutoInterpConfig
 
 # Create config
 cfg = AutoInterpConfig(
@@ -79,7 +79,7 @@ autointerp.run("where/to/save")
 ### 4. Computing the Attribution Graph
 
 ``` python
-from circuitlab import AttributionRunner
+from clt_forge import AttributionRunner
 
 runner = AttributionRunner(
   model_name = model_name,
@@ -96,7 +96,7 @@ graph = runner.run(
 ### 5. Start the Visual-Interface
 
 ``` python
-from circuitlab.frontend import main, AppConfig
+from clt_forge.frontend import main, AppConfig
 
 cfg = AppConfig(
   graph_path = "path/to/graph", 

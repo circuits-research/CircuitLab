@@ -6,10 +6,10 @@ import sys
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from circuitlab.transformer_lens.multilingual_patching import patch_official_model_names, patch_convert_hf_model_config
-from circuitlab.training.activations_store import ActivationsStore
-from circuitlab.training.compressed_activations_store import CompressionConfig
-from circuitlab.infra.jobs_id import compute_job_split_range
+from clt_forge.transformer_lens.multilingual_patching import patch_official_model_names, patch_convert_hf_model_config
+from clt_forge.training.activations_store import ActivationsStore
+from clt_forge.training.compressed_activations_store import CompressionConfig
+from clt_forge.infra.jobs_id import compute_job_split_range
 from runners.training.gpt2.config import clt_training_runner_config
 
 from sae_lens.load_model import load_model

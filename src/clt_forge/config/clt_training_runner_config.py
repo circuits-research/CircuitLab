@@ -2,8 +2,8 @@ import torch
 
 from pydantic import BaseModel, field_validator, model_validator, ConfigDict
 from typing import Any, Dict, Optional, TypeVar
-from circuitlab import logger
-from circuitlab.config import CLTConfig
+from clt_forge import logger
+from clt_forge.config import CLTConfig
 
 T = TypeVar("T", bound=BaseModel)
 

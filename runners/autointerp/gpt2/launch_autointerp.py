@@ -3,11 +3,11 @@ from pathlib import Path
 import torch
 import os
 
-from circuitlab.config.autointerp_config import AutoInterpConfig
-from circuitlab.autointerp.pipeline_new import AutoInterp
+from clt_forge.config.autointerp_config import AutoInterpConfig
+from clt_forge.autointerp.pipeline_new import AutoInterp
 
-import circuitlab
-STORAGE_ROOT = Path(circuitlab.__file__).resolve().parents[2] / "storage"
+import clt_forge
+STORAGE_ROOT = Path(clt_forge.__file__).resolve().parents[2] / "storage"
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 

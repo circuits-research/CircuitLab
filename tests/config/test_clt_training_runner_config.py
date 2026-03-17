@@ -1,6 +1,6 @@
 import json
 import pytest
-from circuitlab.config.clt_config import CLTConfig
+from clt_forge.config.clt_config import CLTConfig
 from tests.utils import build_clt_training_runner_cfg
 import torch 
 

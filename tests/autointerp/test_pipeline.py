@@ -1,10 +1,10 @@
 import pytest
 from pathlib import Path
 
-from circuitlab.clt import CLT
-from circuitlab.config import CLTConfig
+from clt_forge.clt import CLT
+from clt_forge.config import CLTConfig
 from tests.utils import build_clt_training_runner_cfg, build_autointerp_cfg
-from circuitlab.autointerp.pipeline_new import AutoInterp
+from clt_forge.autointerp.pipeline_new import AutoInterp
 
 # Minimal testing, just looking at the auto-interp outputs is a strong test in itself.
 
