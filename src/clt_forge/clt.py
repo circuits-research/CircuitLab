@@ -11,10 +11,10 @@ import json
 from pydantic import BaseModel, ConfigDict
 from typing import Union, Optional, Dict
 
-from circuitlab.config import CLTConfig
-from circuitlab.utils import DTYPE_MAP, CLT_WEIGHTS_FILENAME, CLT_CFG_FILENAME
-from circuitlab.training.optim import JumpReLU
-from circuitlab import logger
+from clt_forge.config import CLTConfig
+from clt_forge.utils import DTYPE_MAP, CLT_WEIGHTS_FILENAME, CLT_CFG_FILENAME
+from clt_forge.training.optim import JumpReLU
+from clt_forge import logger
 
 C_l0_COEF = 4
 
