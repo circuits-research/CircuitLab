@@ -142,13 +142,15 @@ We welcome contributions to the library. Please refer to [CONTRIBUTING.md](CONTR
 
 If you found CLT-Forge useful for your research, please cite our paper:
 ```bibtex
-@misc{draye2026cltforgescalablelibrarycrosslayer,
-      title={CLT-Forge: A Scalable Library for Cross-Layer Transcoders and Attribution Graphs}, 
-      author={Florent Draye and Abir Harrasse and Vedant Palit and Tung-Yu Wu and Jiarui Liu and Punya Syon Pandey and Roderick Wu and Terry Jingchen Zhang and Zhijing Jin and Bernhard Schölkopf},
-      year={2026},
-      eprint={2603.21014},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2603.21014}, 
+@article{draye2026clt,
+  title={{CLT}-{F}orge: {A} Scalable Library for Cross-Layer Transcoders and Attribution Graphs}, 
+  author={Florent Draye and Abir Harrasse and Vedant Palit and Tung-Yu Wu and Jiarui Liu and Punya Syon Pandey and Roderick Wu and Terry Jingchen Zhang and Zhijing Jin and Bernhard Sch{\"{o}}lkopf},
+  journal      = {CoRR},
+  volume       = {abs/2603.21014},
+  year         = {2026},
+  url          = {https://doi.org/10.48550/arXiv.2603.21014},
+  doi          = {10.48550/ARXIV.2603.21014},
+  eprinttype   = {arXiv},
+  eprint       = {2603.21014},
 }
 ```
